@@ -1,4 +1,6 @@
 // 内联 SVG 图标，避免额外图标依赖
+import iconUrl from "~icons/icon.png";
+
 interface IconProps {
   className?: string;
 }
@@ -78,12 +80,7 @@ export function IconLogout({ className }: IconProps) {
   );
 }
 
-export function LogoMark({ className }: IconProps) {
-  return (
-    <svg viewBox="0 0 1024 1024" className={className}>
-      <rect width="1024" height="1024" rx="200" fill="#0f172a" />
-      <path d="M258 345h440l-90-90" fill="none" stroke="#ffffff" strokeWidth="90" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M766 679H326l90 90" fill="none" stroke="#22c55e" strokeWidth="90" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
+/** 应用图标（与安装包/窗口图标同源，由 pnpm tauri icon 生成） */
+export function Logo({ className }: IconProps) {
+  return <img src={iconUrl} alt="Git Repo Sync" className={className} draggable={false} />;
 }

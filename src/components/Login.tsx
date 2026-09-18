@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api } from "@/lib/api";
-import { LogoMark } from "@/components/icons";
+import { Logo } from "@/components/icons";
 
 export function Login({
   onLogin,
@@ -36,7 +36,7 @@ export function Login({
     <div className="flex h-full items-center justify-center bg-muted/40">
       <Card className="w-[380px]">
         <CardHeader className="items-center text-center">
-          <LogoMark className="mx-auto h-16 w-16 rounded-xl" />
+          <Logo className="mx-auto h-16 w-16" />
           <CardTitle className="text-xl">Git Repo Sync</CardTitle>
           <CardDescription>请登录后继续使用</CardDescription>
         </CardHeader>

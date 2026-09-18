@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { IconBranch, IconCloud, IconLogout, IconSettings, LogoMark } from "@/components/icons";
+import { IconBranch, IconCloud, IconLogout, IconSettings, Logo } from "@/components/icons";
 
 export type PageKey = "sync" | "providers" | "settings";
 
@@ -30,7 +30,7 @@ export function Layout({
     <div className="flex h-full">
       <aside className="flex w-52 shrink-0 flex-col border-r bg-muted/30">
         <div className="flex items-center gap-2.5 px-4 py-4">
-          <LogoMark className="h-8 w-8 rounded-lg" />
+          <Logo className="h-8 w-8" />
           <div className="leading-tight">
             <div className="text-sm font-semibold">Git Repo Sync</div>
             <div className="text-xs text-muted-foreground">v{version}</div>

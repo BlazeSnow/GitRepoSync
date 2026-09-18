@@ -11,6 +11,8 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(dirname, "./src"),
+      // 应用图标产物（由 pnpm tauri icon 从用户图标源图生成）
+      "~icons": path.resolve(dirname, "./src-tauri/icons"),
     },
   },
   clearScreen: false,

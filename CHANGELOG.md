@@ -19,6 +19,6 @@
 ### 🚀 改进
 
 - ⬆️ 前后端依赖全量升级：前端 React 18 → 19、Vite 6 → 8（rolldown 打包）、Tailwind CSS 3 → 4（CSS-first 主题配置）、TypeScript 5 → 7、tailwind-merge 2 → 3、@vitejs/plugin-react 4 → 6；后端 sha2 0.10 → 0.11、dirs 5 → 7、rusqlite 0.32 → 0.40、reqwest 0.12 → 0.13（rustls 特性更名），移除未使用的 rand 依赖
-- ⚡ 新增 `run.ps1` 快速启动脚本：默认构建后**后台启动** Debug 版（源码有变动时自动增量重建，脚本立即返回不占用终端），`-Dev` 进入热重载开发模式，`-Build` 打包发布版；自动切换终端 UTF-8 编码、检查依赖并在首次运行时安装前端依赖
+- ⚡ 新增 `run.ps1` 快速启动脚本：默认构建后**后台启动** Debug 版（源码有变动时自动增量重建，脚本立即返回不占用终端），`-Dev` 进入热重载开发模式（启动前自动清理 1420 端口残留的开发服务器），`-Build` 打包发布版；自动切换终端 UTF-8 编码、检查依赖并在首次运行时安装前端依赖
 - 📦 发布流水线：GitHub Actions 四平台矩阵打包（Windows x64、macOS Apple Silicon / Intel、Linux x64），tag 推送后自动发布至 GitHub Releases；`vX.Y.Z-beta.N` 形式的 tag 自动标记为 Prerelease；MSI 版本采用独立发布序列号（第 N 次发布为 1.0.N），规避 MSI 版本不支持 beta 语义的问题，保证新旧版本可覆盖升级
 - 🖼️ 图片资源统一由 Git LFS 管理，CI 检出时自动拉取

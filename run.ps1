@@ -71,6 +71,19 @@ try {
 
     # 4. 按模式启动
     if ($Dev) {
+        # 清理上次中断残留的 vite 开发服务器（占用 1420 端口的孤儿 node 进程）
+        $stale = Get-NetTCPConnection -LocalPort 1420 -State Listen -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty OwningProcess -Unique
+        foreach ($ownerPid in $stale) {
+            $proc = Get-Process -Id $ownerPid -ErrorAction SilentlyContinue
+            if ($proc -and $proc.ProcessName -eq 'node') {
+                Write-Host "清理残留的开发服务器进程（PID $ownerPid）..."
+                Stop-Process -Id $ownerPid -Force -ErrorAction SilentlyContinue
+            }
+            elseif ($proc) {
+                throw "端口 1420 被进程 $($proc.ProcessName)（PID $ownerPid）占用，且不是本项目的开发服务器，请手动处理。"
+            }
+        }
         pnpm tauri dev
         if ($LASTEXITCODE -ne 0) { throw '运行失败' }
     }

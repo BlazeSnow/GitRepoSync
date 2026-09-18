@@ -45,10 +45,11 @@
 
 ## 5. Agent（MCP 接入）
 
-- 软件采用 MCP（Model Context Protocol）连接方式供 Agent 接入
-- MCP 连接通过 APIKEY 鉴权
+- 软件采用 MCP stdio 连接方式供 Agent 接入：Agent 客户端以子进程方式运行本程序的 `mcp` 模式（`git-repo-sync.exe mcp`），协议为换行分隔的 JSON-RPC 2.0（stdin 读入、stdout 输出）
+- MCP 连接通过 APIKEY 鉴权：客户端须通过环境变量 `GIT_REPO_SYNC_API_KEY` 或 `--api-key` 参数提供 APIKEY，与设置页生成的 APIKEY 一致方可访问，否则所有请求返回 unauthorized
+- API Key 在设置页查看、复制、重新生成；设置页附 MCP 客户端配置示例
 
-**实现说明**：应用内置 MCP HTTP 服务（JSON-RPC 2.0），默认地址 `http://127.0.0.1:17878/mcp`，协议版本 `2024-11-05`；鉴权头支持 `Authorization: Bearer <APIKEY>` 或 `X-Api-Key: <APIKEY>`。API Key 在设置页查看、复制、重新生成；端口可修改（重启生效）。
+**实现说明**：GUI 与 mcp 子命令共享同一份数据目录（系统应用数据目录 + 应用标识符）。
 
 可用工具：
 
@@ -70,4 +71,4 @@
 | `sessions.json` | 登录会话令牌 |
 | `repos.json` | 同步仓库列表与状态 |
 | `providers.json` | 平台 PAT |
-| `settings.json` | MCP 端口与 APIKEY |
+| `settings.json` | MCP APIKEY |

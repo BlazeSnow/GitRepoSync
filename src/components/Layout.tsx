@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { LangButton, useI18n } from "@/i18n";
+import { LangButton } from "@/components/LangButton";
 import {
   IconBranch,
   IconCloud,
@@ -28,13 +29,13 @@ export function Layout({
   onLogout: () => void;
   children: ReactNode;
 }) {
-  const { t } = useI18n();
+  const { t } = useTranslation();
   const NAV_ITEMS: { key: PageKey; label: string; icon: (cls: string) => ReactNode }[] = [
-    { key: "sync", label: t.navSync, icon: (cls) => <IconBranch className={cls} /> },
-    { key: "providers", label: t.navProviders, icon: (cls) => <IconCloud className={cls} /> },
-    { key: "logs", label: t.navLogs, icon: (cls) => <IconList className={cls} /> },
-    { key: "mcp", label: t.navMcp, icon: (cls) => <IconPlug className={cls} /> },
-    { key: "settings", label: t.navSettings, icon: (cls) => <IconSettings className={cls} /> },
+    { key: "sync", label: t("navSync"), icon: (cls) => <IconBranch className={cls} /> },
+    { key: "providers", label: t("navProviders"), icon: (cls) => <IconCloud className={cls} /> },
+    { key: "logs", label: t("navLogs"), icon: (cls) => <IconList className={cls} /> },
+    { key: "mcp", label: t("navMcp"), icon: (cls) => <IconPlug className={cls} /> },
+    { key: "settings", label: t("navSettings"), icon: (cls) => <IconSettings className={cls} /> },
   ];
   return (
     <div className="flex h-full">
@@ -65,10 +66,10 @@ export function Layout({
         </nav>
         <div className="space-y-2 border-t px-3 py-3">
           <LangButton />
-          <div className="px-1 text-xs text-muted-foreground">{t.currentUser(username)}</div>
+          <div className="px-1 text-xs text-muted-foreground">{t("currentUser", { user: username })}</div>
           <Button variant="ghost" size="sm" className="w-full justify-start" onClick={onLogout}>
             <IconLogout className="h-4 w-4" />
-            {t.signOut}
+            {t("signOut")}
           </Button>
         </div>
       </aside>

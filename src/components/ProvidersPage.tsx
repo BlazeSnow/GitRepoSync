@@ -4,15 +4,15 @@ import type { AccountInfo, ProviderInfo, ProviderPlatform } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { useI18n } from "@/i18n";
+import { useTranslation } from "react-i18next";
 
-const PLATFORMS: { key: ProviderPlatform; title: string; hintKey: "githubHint" | "gitlabHint" }[] = [
-  { key: "github", title: "GitHub", hintKey: "githubHint" },
-  { key: "gitlab", title: "GitLab", hintKey: "gitlabHint" },
+const PLATFORMS: { key: ProviderPlatform; title: string }[] = [
+  { key: "github", title: "GitHub" },
+  { key: "gitlab", title: "GitLab" },
 ];
 
 export function ProvidersPage({ token }: { token: string }) {
-  const { t } = useI18n();
+  const { t } = useTranslation();
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [pats, setPats] = useState<Record<string, string>>({ github: "", gitlab: "" });
   const [accounts, setAccounts] = useState<Record<string, AccountInfo | null>>({});
@@ -43,7 +43,7 @@ export function ProvidersPage({ token }: { token: string }) {
       setAccounts((a) => ({ ...a, [platform]: account }));
       const fresh = await api.getProviders(token);
       setProviders(fresh);
-      setMessages((m) => ({ ...m, [platform]: { text: t.fetchOk, ok: true } }));
+      setMessages((m) => ({ ...m, [platform]: { text: t("fetchOk"), ok: true } }));
     } catch (err) {
       setMessages((m) => ({ ...m, [platform]: { text: String(err), ok: false } }));
     } finally {
@@ -53,10 +53,10 @@ export function ProvidersPage({ token }: { token: string }) {
 
   return (
     <div className="p-6">
-      <h1 className="mb-1 text-lg font-semibold">{t.providersTitle}</h1>
-      <p className="mb-4 text-sm text-muted-foreground">{t.providersDesc}</p>
+      <h1 className="mb-1 text-lg font-semibold">{t("providersTitle")}</h1>
+      <p className="mb-4 text-sm text-muted-foreground">{t("providersDesc")}</p>
       <div className="grid gap-4 lg:grid-cols-2">
-        {PLATFORMS.map(({ key, title, hintKey }) => {
+        {PLATFORMS.map(({ key, title }) => {
           const info = infoOf(key);
           const account = accounts[key];
           return (
@@ -66,16 +66,18 @@ export function ProvidersPage({ token }: { token: string }) {
                   {title}
                   {info?.hasPat && (
                     <span className="rounded bg-secondary px-1.5 py-0.5 text-xs text-secondary-foreground">
-                      {t.patConfigured(info.patMasked ?? "")}
+                      {t("patConfigured", { mask: info.patMasked ?? "" })}
                     </span>
                   )}
                 </CardTitle>
-                <CardDescription>{t[hintKey]}</CardDescription>
+                <CardDescription>
+                  {key === "github" ? t("githubHint") : t("gitlabHint")}
+                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
                 <Input
                   type="password"
-                  placeholder={info?.hasPat ? t.patPlaceholderSaved : t.patPlaceholderNew}
+                  placeholder={info?.hasPat ? t("patPlaceholderSaved") : t("patPlaceholderNew")}
                   value={pats[key] ?? ""}
                   onChange={(e) => setPats((p) => ({ ...p, [key]: e.target.value }))}
                 />
@@ -85,7 +87,7 @@ export function ProvidersPage({ token }: { token: string }) {
                     onClick={() => handleSaveAndFetch(key)}
                     disabled={loading[key]}
                   >
-                    {loading[key] ? t.fetching : t.saveAndFetch}
+                    {loading[key] ? t("fetching") : t("saveAndFetch")}
                   </Button>
                   {messages[key]?.text && (
                     <span
@@ -113,10 +115,10 @@ export function ProvidersPage({ token }: { token: string }) {
                     </div>
                     <div>
                       <div className="mb-1.5 text-xs font-medium text-muted-foreground">
-                        {t.orgs(account.orgs.length)}
+                        {t("orgs", { count: account.orgs.length })}
                       </div>
                       {account.orgs.length === 0 ? (
-                        <div className="text-xs text-muted-foreground">{t.noOrgs}</div>
+                        <div className="text-xs text-muted-foreground">{t("noOrgs")}</div>
                       ) : (
                         <div className="flex flex-wrap gap-1.5">
                           {account.orgs.map((org) => (

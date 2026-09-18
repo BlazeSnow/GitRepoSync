@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "@/lib/api";
 import type { Repo, SyncEvent, SyncStatus } from "@/lib/types";
-import { useI18n, relativeTime } from "@/i18n";
+import { useTranslation } from "react-i18next";
+import { relativeTime } from "@/i18n";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -36,7 +37,7 @@ import { IconPlus, IconRefresh, IconSquare } from "@/components/icons";
 const STALE_DAYS = [1, 3, 7, 30];
 
 export function SyncPage({ token }: { token: string }) {
-  const { lang, t } = useI18n();
+  const { t } = useTranslation();
   const [repos, setRepos] = useState<Repo[]>([]);
   const [stale, setStale] = useState("all");
   const [edit, setEdit] = useState<EditState | null>(null);
@@ -131,7 +132,7 @@ export function SyncPage({ token }: { token: string }) {
   const menuItems: ContextMenuItem[] = menu
     ? [
         {
-          label: t.editRepo,
+          label: t("editRepo"),
           onSelect: () =>
             setEdit({
               id: menu.repo.id,
@@ -141,12 +142,12 @@ export function SyncPage({ token }: { token: string }) {
             }),
         },
         {
-          label: t.startSync,
+          label: t("startSync"),
           onSelect: () => {
             void api.startSync(token, [menu.repo.id]).then(load);
           },
         },
-        { label: t.confirmDelete, danger: true, onSelect: () => setDeleteTarget(menu.repo) },
+        { label: t("confirmDelete"), danger: true, onSelect: () => setDeleteTarget(menu.repo) },
       ]
     : [];
 
@@ -154,11 +155,11 @@ export function SyncPage({ token }: { token: string }) {
     SyncStatus,
     { label: string; variant: "secondary" | "success" | "destructive" | "outline" }
   > = {
-    idle: { label: t.statusIdle, variant: "outline" },
-    running: { label: t.statusRunning, variant: "secondary" },
-    success: { label: t.statusSuccess, variant: "success" },
-    failed: { label: t.statusFailed, variant: "destructive" },
-    stopped: { label: t.statusStopped, variant: "outline" },
+    idle: { label: t("statusIdle"), variant: "outline" },
+    running: { label: t("statusRunning"), variant: "secondary" },
+    success: { label: t("statusSuccess"), variant: "success" },
+    failed: { label: t("statusFailed"), variant: "destructive" },
+    stopped: { label: t("statusStopped"), variant: "outline" },
   };
 
   const running = repos.some((r) => r.lastStatus === "running");
@@ -168,21 +169,21 @@ export function SyncPage({ token }: { token: string }) {
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <Button onClick={handleStartSync} disabled={staleIds.length === 0}>
           <IconRefresh />
-          {stale === "all" ? t.startSync : t.startSyncCount(staleIds.length)}
+          {stale === "all" ? t("startSync") : t("startSyncCount", { count: staleIds.length })}
         </Button>
         <Button variant="outline" onClick={handleStopSync} disabled={!running}>
           <IconSquare className="h-3.5 w-3.5" />
-          {t.stopSync}
+          {t("stopSync")}
         </Button>
         <Select value={stale} onValueChange={setStale}>
           <SelectTrigger className="w-48">
-            <SelectValue placeholder={t.staleAll} />
+            <SelectValue placeholder={t("staleAll")} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">{t.staleAll}</SelectItem>
+            <SelectItem value="all">{t("staleAll")}</SelectItem>
             {STALE_DAYS.map((d) => (
               <SelectItem key={d} value={String(d)}>
-                {t.staleDays(d)}
+                {t("staleDays", { count: d })}
               </SelectItem>
             ))}
           </SelectContent>
@@ -193,7 +194,7 @@ export function SyncPage({ token }: { token: string }) {
           onClick={() => setEdit({ id: null, name: "", source: "", target: "" })}
         >
           <IconPlus />
-          {t.addRepo}
+          {t("addRepo")}
         </Button>
       </div>
 
@@ -203,18 +204,18 @@ export function SyncPage({ token }: { token: string }) {
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead className="w-52">{t.colRepo}</TableHead>
-              <TableHead>{t.colSource}</TableHead>
-              <TableHead>{t.colTarget}</TableHead>
-              <TableHead className="w-24">{t.colStatus}</TableHead>
-              <TableHead className="w-32">{t.colLastSynced}</TableHead>
+              <TableHead className="w-52">{t("colRepo")}</TableHead>
+              <TableHead>{t("colSource")}</TableHead>
+              <TableHead>{t("colTarget")}</TableHead>
+              <TableHead className="w-24">{t("colStatus")}</TableHead>
+              <TableHead className="w-32">{t("colLastSynced")}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {repos.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={5} className="h-32 text-center text-muted-foreground">
-                  {t.syncEmpty}
+                  {t("syncEmpty")}
                 </TableCell>
               </TableRow>
             ) : (
@@ -257,7 +258,7 @@ export function SyncPage({ token }: { token: string }) {
                       </Badge>
                     </TableCell>
                     <TableCell className="text-muted-foreground">
-                      {relativeTime(repo.lastSynced, lang)}
+                      {relativeTime(repo.lastSynced)}
                     </TableCell>
                   </TableRow>
                 );
@@ -272,43 +273,43 @@ export function SyncPage({ token }: { token: string }) {
       <Dialog open={edit !== null} onOpenChange={(open) => !open && setEdit(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{edit?.id ? t.editRepo : t.addRepoTitle}</DialogTitle>
-            <DialogDescription>{t.repoFlowDesc}</DialogDescription>
+            <DialogTitle>{edit?.id ? t("editRepo") : t("addRepoTitle")}</DialogTitle>
+            <DialogDescription>{t("repoFlowDesc")}</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-1.5">
-              <Label htmlFor="repo-name">{t.fieldName}</Label>
+              <Label htmlFor="repo-name">{t("fieldName")}</Label>
               <Input
                 id="repo-name"
                 value={edit?.name ?? ""}
                 onChange={(e) => setEdit((s) => (s ? { ...s, name: e.target.value } : s))}
-                placeholder={t.placeholderName}
+                placeholder={t("placeholderName")}
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="repo-source">{t.fieldSource}</Label>
+              <Label htmlFor="repo-source">{t("fieldSource")}</Label>
               <Input
                 id="repo-source"
                 value={edit?.source ?? ""}
                 onChange={(e) => setEdit((s) => (s ? { ...s, source: e.target.value } : s))}
-                placeholder={t.placeholderSource}
+                placeholder={t("placeholderSource")}
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="repo-target">{t.fieldTarget}</Label>
+              <Label htmlFor="repo-target">{t("fieldTarget")}</Label>
               <Input
                 id="repo-target"
                 value={edit?.target ?? ""}
                 onChange={(e) => setEdit((s) => (s ? { ...s, target: e.target.value } : s))}
-                placeholder={t.placeholderTarget}
+                placeholder={t("placeholderTarget")}
               />
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEdit(null)}>
-              {t.cancel}
+              {t("cancel")}
             </Button>
-            <Button onClick={handleSave}>{t.save}</Button>
+            <Button onClick={handleSave}>{t("save")}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -316,17 +317,17 @@ export function SyncPage({ token }: { token: string }) {
       <Dialog open={deleteTarget !== null} onOpenChange={(open) => !open && setDeleteTarget(null)}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>{t.deleteRepo}</DialogTitle>
+            <DialogTitle>{t("deleteRepo")}</DialogTitle>
             <DialogDescription>
-              {deleteTarget && t.deleteRepoDesc(deleteTarget.name)}
+              {deleteTarget && t("deleteRepoDesc", { name: deleteTarget.name })}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteTarget(null)}>
-              {t.cancel}
+              {t("cancel")}
             </Button>
             <Button variant="destructive" onClick={handleDelete}>
-              {t.confirmDelete}
+              {t("confirmDelete")}
             </Button>
           </DialogFooter>
         </DialogContent>

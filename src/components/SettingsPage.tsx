@@ -7,10 +7,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { useI18n } from "@/i18n";
+import { useTranslation } from "react-i18next";
 
 export function SettingsPage({ token, username }: { token: string; username: string }) {
-  const { t } = useI18n();
+  const { t } = useTranslation();
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [repos, setRepos] = useState<Repo[]>([]);
   const [baseDir, setBaseDir] = useState("");
@@ -38,7 +38,7 @@ export function SettingsPage({ token, username }: { token: string; username: str
     try {
       await api.setBaseDir(token, baseDirInput);
       setBaseDir(baseDirInput.trim());
-      setBaseMsg({ text: t.baseDirSaved, ok: true });
+      setBaseMsg({ text: t("baseDirSaved"), ok: true });
     } catch (err) {
       setBaseMsg({ text: String(err), ok: false });
     }
@@ -47,12 +47,12 @@ export function SettingsPage({ token, username }: { token: string; username: str
   async function handleChangePassword() {
     setPwdMsg(null);
     if (newPwd !== confirmPwd) {
-      setPwdMsg({ text: t.pwdMismatch, ok: false });
+      setPwdMsg({ text: t("pwdMismatch"), ok: false });
       return;
     }
     try {
       await api.changePassword(token, oldPwd, newPwd);
-      setPwdMsg({ text: t.pwdChanged, ok: true });
+      setPwdMsg({ text: t("pwdChanged"), ok: true });
       setOldPwd("");
       setNewPwd("");
       setConfirmPwd("");
@@ -63,12 +63,12 @@ export function SettingsPage({ token, username }: { token: string; username: str
 
   return (
     <div className="mx-auto max-w-3xl space-y-4 p-6">
-      <h1 className="text-lg font-semibold">{t.settingsTitle}</h1>
+      <h1 className="text-lg font-semibold">{t("settingsTitle")}</h1>
 
       <Card>
         <CardHeader>
-          <CardTitle>{t.baseDirTitle}</CardTitle>
-          <CardDescription>{t.baseDirDesc}</CardDescription>
+          <CardTitle>{t("baseDirTitle")}</CardTitle>
+          <CardDescription>{t("baseDirDesc")}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex items-center gap-3">
@@ -84,7 +84,7 @@ export function SettingsPage({ token, username }: { token: string; username: str
               onClick={handleSaveBaseDir}
               disabled={!baseDirInput.trim() || baseDirInput === baseDir}
             >
-              {t.save}
+              {t("save")}
             </Button>
             {baseMsg && (
               <span className={`text-xs ${baseMsg.ok ? "text-success" : "text-destructive"}`}>
@@ -92,19 +92,19 @@ export function SettingsPage({ token, username }: { token: string; username: str
               </span>
             )}
           </div>
-          <p className="text-xs text-muted-foreground">{t.currentBaseDir(baseDir || "…")}</p>
+          <p className="text-xs text-muted-foreground">{t("currentBaseDir", { dir: baseDir || "…" })}</p>
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle>{t.account}</CardTitle>
-          <CardDescription>{t.currentUser(username)}</CardDescription>
+          <CardTitle>{t("account")}</CardTitle>
+          <CardDescription>{t("currentUser", { user: username })}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-3">
             <div className="space-y-1.5">
-              <Label htmlFor="old-pwd">{t.oldPassword}</Label>
+              <Label htmlFor="old-pwd">{t("oldPassword")}</Label>
               <Input
                 id="old-pwd"
                 type="password"
@@ -113,7 +113,7 @@ export function SettingsPage({ token, username }: { token: string; username: str
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="new-pwd">{t.newPassword}</Label>
+              <Label htmlFor="new-pwd">{t("newPassword")}</Label>
               <Input
                 id="new-pwd"
                 type="password"
@@ -122,7 +122,7 @@ export function SettingsPage({ token, username }: { token: string; username: str
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="confirm-pwd">{t.confirmPassword}</Label>
+              <Label htmlFor="confirm-pwd">{t("confirmPassword")}</Label>
               <Input
                 id="confirm-pwd"
                 type="password"
@@ -133,7 +133,7 @@ export function SettingsPage({ token, username }: { token: string; username: str
           </div>
           <div className="flex items-center gap-3">
             <Button size="sm" onClick={handleChangePassword} disabled={!oldPwd || !newPwd}>
-              {t.changePassword}
+              {t("changePassword")}
             </Button>
             {pwdMsg && (
               <span className={`text-xs ${pwdMsg.ok ? "text-success" : "text-destructive"}`}>
@@ -146,23 +146,23 @@ export function SettingsPage({ token, username }: { token: string; username: str
 
       <Card>
         <CardHeader>
-          <CardTitle>{t.softwareInfo}</CardTitle>
+          <CardTitle>{t("softwareInfo")}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-1 text-sm">
           <div className="flex gap-2">
-            <span className="w-32 text-muted-foreground">{t.appName}</span>
+            <span className="w-32 text-muted-foreground">{t("appName")}</span>
             <span>{appInfo?.name ?? "Git Repo Sync"}</span>
           </div>
           <div className="flex gap-2">
-            <span className="w-32 text-muted-foreground">{t.versionLabel}</span>
+            <span className="w-32 text-muted-foreground">{t("versionLabel")}</span>
             <Badge variant="secondary">v{appInfo?.version ?? "…"}</Badge>
           </div>
           <div className="flex gap-2">
-            <span className="w-32 text-muted-foreground">{t.osLabel}</span>
+            <span className="w-32 text-muted-foreground">{t("osLabel")}</span>
             <span>{appInfo?.os ?? "…"}</span>
           </div>
           <div className="flex gap-2">
-            <span className="w-32 text-muted-foreground">{t.repoCountLabel}</span>
+            <span className="w-32 text-muted-foreground">{t("repoCountLabel")}</span>
             <span>{repos.length}</span>
           </div>
         </CardContent>
@@ -170,19 +170,19 @@ export function SettingsPage({ token, username }: { token: string; username: str
 
       <Card>
         <CardHeader>
-          <CardTitle>{t.repoListTitle}</CardTitle>
-          <CardDescription>{t.repoListDesc}</CardDescription>
+          <CardTitle>{t("repoListTitle")}</CardTitle>
+          <CardDescription>{t("repoListDesc")}</CardDescription>
         </CardHeader>
         <CardContent>
           {repos.length === 0 ? (
-            <p className="text-sm text-muted-foreground">{t.listEmpty}</p>
+            <p className="text-sm text-muted-foreground">{t("listEmpty")}</p>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
-                  <TableHead>{t.colRepo}</TableHead>
-                  <TableHead>{t.colSource}</TableHead>
-                  <TableHead>{t.colTarget}</TableHead>
+                  <TableHead>{t("colRepo")}</TableHead>
+                  <TableHead>{t("colSource")}</TableHead>
+                  <TableHead>{t("colTarget")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>

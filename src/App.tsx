@@ -8,12 +8,12 @@ import { McpPage } from "@/components/McpPage";
 import { ProvidersPage } from "@/components/ProvidersPage";
 import { SettingsPage } from "@/components/SettingsPage";
 import { SyncPage } from "@/components/SyncPage";
-import { useI18n } from "@/i18n";
+import { useTranslation } from "react-i18next";
 
 const TOKEN_KEY = "grs_token";
 
 export default function App() {
-  const { t } = useI18n();
+  const { t } = useTranslation();
   const [token, setToken] = useState<string | null>(() => localStorage.getItem(TOKEN_KEY));
   const [username, setUsername] = useState("");
   const [checking, setChecking] = useState(() => !!localStorage.getItem(TOKEN_KEY));
@@ -59,7 +59,7 @@ export default function App() {
   if (checking) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        {t.restoring}
+        {t("restoring")}
       </div>
     );
   }

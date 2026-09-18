@@ -1,17 +1,19 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+// 前端多语言：i18next + react-i18next。
+// 词典内嵌于本文件；浏览器语言探测（localStorage 记忆 + navigator 回退）；
+// 语言切换时同步后端（set_lang 命令），保证错误提示、日志与同步结果语言一致。
+import i18n, { type Resource } from "i18next";
+import { initReactI18next } from "react-i18next";
+import LanguageDetector from "i18next-browser-languagedetector";
 import { invoke } from "@tauri-apps/api/core";
 
 export type Lang = "zh" | "en";
 
 const zh = {
-  // 通用
   refresh: "刷新",
   cancel: "取消",
   save: "保存",
   copy: "复制",
   copied: "已复制到剪贴板",
-  langName: "English",
-  // 登录
   loginSubtitle: "请登录后继续使用",
   username: "用户名",
   password: "密码",
@@ -19,20 +21,18 @@ const zh = {
   signIn: "登录",
   signingIn: "登录中…",
   loginHint: "初始账号 admin，初始密码 admin123",
-  // 侧边栏
   navSync: "同步仓库",
   navProviders: "提供商",
   navLogs: "日志",
   navMcp: "MCP",
   navSettings: "设置",
-  currentUser: (u: string) => `当前用户：${u}`,
+  currentUser: "当前用户：{{user}}",
   signOut: "退出登录",
-  // 同步仓库
   startSync: "开始同步",
-  startSyncCount: (n: number) => `开始同步（${n} 个）`,
+  startSyncCount: "开始同步（{{count}} 个）",
   stopSync: "停止同步",
   staleAll: "全部仓库",
-  staleDays: (d: number) => `${d} 天内未同步`,
+  staleDays: "{{count}} 天内未同步",
   addRepo: "添加仓库",
   colRepo: "仓库",
   colSource: "源地址",
@@ -56,36 +56,31 @@ const zh = {
   placeholderSource: "https://github.com/user/repo.git",
   placeholderTarget: "https://git.example.com/backup/repo.git",
   deleteRepo: "删除仓库",
-  deleteRepoDesc: (name: string) =>
-    `确定要删除仓库“${name}”吗？仅移除记录，不会删除本地文件。`,
+  deleteRepoDesc: "确定要删除仓库“{{name}}”吗？仅移除记录，不会删除本地文件。",
   confirmDelete: "删除",
-  // 相对时间
   never: "从不",
   justNow: "刚刚",
-  minutesAgo: (m: number) => `${m} 分钟前`,
-  hoursAgo: (h: number) => `${h} 小时前`,
-  daysAgo: (d: number) => `${d} 天前`,
-  // 提供商
+  minutesAgo: "{{count}} 分钟前",
+  hoursAgo: "{{count}} 小时前",
+  daysAgo: "{{count}} 天前",
   providersTitle: "提供商",
   providersDesc: "填入对应平台的 Personal Access Token（PAT），即可列出账户及其组织",
   githubHint: "需要 repo / read:org 权限的 Personal Access Token",
   gitlabHint: "需要 read_api / read_user 权限的 Personal Access Token",
-  patConfigured: (mask: string) => `已配置 ${mask}`,
+  patConfigured: "已配置 {{mask}}",
   patPlaceholderNew: "粘贴 Personal Access Token",
   patPlaceholderSaved: "已保存，输入新值可更新",
   saveAndFetch: "保存并获取账户",
   fetching: "获取中…",
   fetchOk: "验证成功",
-  orgs: (n: number) => `组织（${n}）`,
+  orgs: "组织（{{count}}）",
   noOrgs: "无组织",
-  // 日志
   logsTitle: "日志",
   logsRecent: "按时间倒序，最近 500 条",
   colTime: "操作时间",
   colAction: "操作",
   colOperator: "操作人",
   logsEmpty: "暂无操作记录",
-  // MCP
   mcpTitle: "MCP",
   mcpConnConfig: "连接配置",
   mcpConnDesc: "Agent 通过 MCP stdio 方式连接本软件（APIKEY 鉴权），可管理仓库并触发同步",
@@ -98,18 +93,18 @@ const zh = {
   mcpColTool: "工具名",
   mcpColDesc: "说明",
   toolListRepos: "列出所有已配置的同步仓库及其最近一次同步状态",
-  toolAddRepo: "新增一个同步仓库：从源仓库拉取到本地基地址作为中转站（更新 LFS 与 submodule），再推送到目标仓库地址",
+  toolAddRepo:
+    "新增一个同步仓库：从源仓库拉取到本地基地址作为中转站（更新 LFS 与 submodule），再推送到目标仓库地址",
   toolRemoveRepo: "删除指定的同步仓库",
   toolSyncRepo: "立即开始同步指定仓库（异步执行）",
   toolGetSyncStatus: "查询所有仓库的最近同步状态",
   toolGetBaseDir: "查询本地仓库基地址（中转站目录）",
   toolSetBaseDir: "修改本地仓库基地址（中转站目录）",
-  // 设置
   settingsTitle: "设置",
   baseDirTitle: "仓库基地址",
   baseDirDesc:
     "同步时从源仓库拉取到基地址下的本地中转目录（按仓库名建目录），更新 LFS 与 submodule 后推送到目标仓库。支持 ~ 开头的路径。",
-  currentBaseDir: (dir: string) => `当前基地址：${dir}`,
+  currentBaseDir: "当前基地址：{{dir}}",
   baseDirSaved: "基地址已保存",
   account: "账户",
   oldPassword: "旧密码",
@@ -129,15 +124,12 @@ const zh = {
   restoring: "正在恢复登录…",
 };
 
-export type Dict = typeof zh;
-
-const en: Dict = {
+const en = {
   refresh: "Refresh",
   cancel: "Cancel",
   save: "Save",
   copy: "Copy",
   copied: "Copied to clipboard",
-  langName: "中文",
   loginSubtitle: "Sign in to continue",
   username: "Username",
   password: "Password",
@@ -150,13 +142,14 @@ const en: Dict = {
   navLogs: "Logs",
   navMcp: "MCP",
   navSettings: "Settings",
-  currentUser: (u) => `Signed in as ${u}`,
+  currentUser: "Signed in as {{user}}",
   signOut: "Sign out",
   startSync: "Start sync",
-  startSyncCount: (n) => `Start sync (${n})`,
+  startSyncCount: "Start sync ({{count}})",
   stopSync: "Stop sync",
   staleAll: "All repositories",
-  staleDays: (d) => `Not synced in ${d} days`,
+  staleDays_other: "Not synced in {{count}} days",
+  staleDays_one: "Not synced in {{count}} day",
   addRepo: "Add repository",
   colRepo: "Repository",
   colSource: "Source",
@@ -180,26 +173,25 @@ const en: Dict = {
   placeholderSource: "https://github.com/user/repo.git",
   placeholderTarget: "https://git.example.com/backup/repo.git",
   deleteRepo: "Delete repository",
-  deleteRepoDesc: (name) =>
-    `Delete repository “${name}”? Only the record is removed; local files are kept.`,
+  deleteRepoDesc: "Delete repository “{{name}}”? Only the record is removed; local files are kept.",
   confirmDelete: "Delete",
   never: "Never",
   justNow: "Just now",
-  minutesAgo: (m) => `${m} min ago`,
-  hoursAgo: (h) => `${h} h ago`,
-  daysAgo: (d) => `${d} d ago`,
+  minutesAgo: "{{count}} min ago",
+  hoursAgo: "{{count}} h ago",
+  daysAgo: "{{count}} d ago",
   providersTitle: "Providers",
   providersDesc:
     "Enter the Personal Access Token (PAT) for a platform to list your account and organizations",
   githubHint: "A Personal Access Token with repo / read:org scopes",
   gitlabHint: "A Personal Access Token with read_api / read_user scopes",
-  patConfigured: (mask) => `Configured ${mask}`,
+  patConfigured: "Configured {{mask}}",
   patPlaceholderNew: "Paste a Personal Access Token",
   patPlaceholderSaved: "Saved — enter a new value to update",
   saveAndFetch: "Save & fetch account",
   fetching: "Fetching…",
   fetchOk: "Verified",
-  orgs: (n) => `Organizations (${n})`,
+  orgs: "Organizations ({{count}})",
   noOrgs: "No organizations",
   logsTitle: "Logs",
   logsRecent: "Newest first, latest 500 entries",
@@ -231,7 +223,7 @@ const en: Dict = {
   baseDirTitle: "Repository base directory",
   baseDirDesc:
     "During sync, repositories are pulled from the source into a staging directory under the base directory (one folder per repository name); LFS and submodules are updated, then everything is pushed to the target repository. Paths may start with ~.",
-  currentBaseDir: (dir) => `Current base directory: ${dir}`,
+  currentBaseDir: "Current base directory: {{dir}}",
   baseDirSaved: "Base directory saved",
   account: "Account",
   oldPassword: "Old password",
@@ -252,78 +244,51 @@ const en: Dict = {
   restoring: "Restoring session…",
 };
 
-const DICTS: Record<Lang, Dict> = { zh, en };
+const resources: Resource = {
+  zh: { translation: zh },
+  en: { translation: en },
+};
 
-function detectLang(): Lang {
-  const saved = localStorage.getItem("grs_lang");
-  if (saved === "zh" || saved === "en") return saved;
-  return navigator.language.toLowerCase().startsWith("zh") ? "zh" : "en";
-}
+i18n
+  .use(LanguageDetector)
+  .use(initReactI18next)
+  .init({
+    resources,
+    fallbackLng: "zh",
+    // 先读 localStorage 记忆，再按浏览器语言；zh* 归一为 zh，其余归一为 en
+    detection: {
+      order: ["localStorage", "navigator"],
+      caches: ["localStorage"],
+      convertDetectedLanguage: (lng: string) =>
+        lng.toLowerCase().startsWith("zh") ? "zh" : lng.toLowerCase().startsWith("en") ? "en" : lng,
+    },
+    interpolation: { escapeValue: false },
+  });
 
-interface I18n {
-  lang: Lang;
-  setLang: (l: Lang) => void;
-  t: Dict;
-}
-
-const I18nContext = createContext<I18n>({
-  lang: "zh",
-  setLang: () => {},
-  t: zh,
+// 语言切换时同步后端（错误提示、日志、同步结果跟随界面语言）
+i18n.on("languageChanged", (lng) => {
+  const lang: Lang = lng.toLowerCase().startsWith("zh") ? "zh" : "en";
+  invoke("set_lang", { lang }).catch(() => {});
 });
 
-export function I18nProvider({ children }: { children: ReactNode }) {
-  const [lang, setLangState] = useState<Lang>(detectLang);
-
-  useEffect(() => {
-    invoke("set_lang", { lang }).catch(() => {});
-  }, []); // 启动时同步后端语言
-
-  function setLang(l: Lang) {
-    setLangState(l);
-    localStorage.setItem("grs_lang", l);
-    invoke("set_lang", { lang: l }).catch(() => {});
-  }
-
-  return (
-    <I18nContext.Provider value={{ lang, setLang, t: DICTS[lang] }}>
-      {children}
-    </I18nContext.Provider>
-  );
-}
-
-export function useI18n(): I18n {
-  return useContext(I18nContext);
-}
-
-/** 语言切换按钮：显示另一种语言的名称 */
-export function LangButton() {
-  const { lang, setLang } = useI18n();
-  return (
-    <button
-      type="button"
-      className="rounded-md border px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
-      onClick={() => setLang(lang === "zh" ? "en" : "zh")}
-    >
-      {lang === "zh" ? "English" : "中文"}
-    </button>
-  );
+/** 切换界面语言并同步后端 */
+export async function changeAppLang(lang: Lang): Promise<void> {
+  await i18n.changeLanguage(lang);
 }
 
 /** 相对时间格式化（跟随界面语言） */
-export function relativeTime(ms: number | null, lang: Lang): string {
-  const t = DICTS[lang];
-  if (ms === null || ms === undefined) return t.never;
+export function relativeTime(ms: number | null): string {
+  if (ms === null || ms === undefined) return i18n.t("never");
   const diff = Date.now() - ms;
-  if (diff <= 0) return t.justNow;
+  if (diff <= 0) return i18n.t("justNow");
   const sec = Math.floor(diff / 1000);
-  if (sec < 60) return t.justNow;
+  if (sec < 60) return i18n.t("justNow");
   const min = Math.floor(sec / 60);
-  if (min < 60) return t.minutesAgo(min);
+  if (min < 60) return i18n.t("minutesAgo", { count: min });
   const hour = Math.floor(min / 60);
-  if (hour < 24) return t.hoursAgo(hour);
+  if (hour < 24) return i18n.t("hoursAgo", { count: hour });
   const day = Math.floor(hour / 24);
-  if (day < 30) return t.daysAgo(day);
+  if (day < 30) return i18n.t("daysAgo", { count: day });
   const d = new Date(ms);
   const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;

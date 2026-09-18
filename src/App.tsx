@@ -1,16 +1,19 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
-import { Layout, type PageKey } from "@/components/Layout";
+import type { PageKey } from "@/lib/types";
+import { Layout } from "@/components/Layout";
 import { Login } from "@/components/Login";
 import { LogsPage } from "@/components/LogsPage";
 import { McpPage } from "@/components/McpPage";
 import { ProvidersPage } from "@/components/ProvidersPage";
 import { SettingsPage } from "@/components/SettingsPage";
 import { SyncPage } from "@/components/SyncPage";
+import { useI18n } from "@/i18n";
 
 const TOKEN_KEY = "grs_token";
 
 export default function App() {
+  const { t } = useI18n();
   const [token, setToken] = useState<string | null>(() => localStorage.getItem(TOKEN_KEY));
   const [username, setUsername] = useState("");
   const [checking, setChecking] = useState(() => !!localStorage.getItem(TOKEN_KEY));
@@ -56,7 +59,7 @@ export default function App() {
   if (checking) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        正在恢复登录…
+        {t.restoring}
       </div>
     );
   }

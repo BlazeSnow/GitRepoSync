@@ -12,21 +12,10 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { IconCopy, IconRefresh } from "@/components/icons";
-
-const MCP_TOOLS: { name: string; description: string }[] = [
-  { name: "list_repos", description: "列出所有已配置的同步仓库及其最近一次同步状态" },
-  {
-    name: "add_repo",
-    description: "新增同步仓库（name / source / target），从源仓库同步到目标仓库",
-  },
-  { name: "remove_repo", description: "删除指定的同步仓库" },
-  { name: "sync_repo", description: "立即开始同步指定仓库（异步执行）" },
-  { name: "get_sync_status", description: "查询所有仓库的最近同步状态" },
-  { name: "get_base_dir", description: "查询本地仓库基地址（中转站目录）" },
-  { name: "set_base_dir", description: "修改本地仓库基地址（中转站目录）" },
-];
+import { useI18n } from "@/i18n";
 
 export function McpPage({ token }: { token: string }) {
+  const { t } = useI18n();
   const [mcp, setMcp] = useState<McpConfig | null>(null);
   const [copied, setCopied] = useState("");
 
@@ -50,6 +39,16 @@ export function McpPage({ token }: { token: string }) {
       )
     : "";
 
+  const tools: { name: string; description: string }[] = [
+    { name: "list_repos", description: t.toolListRepos },
+    { name: "add_repo", description: t.toolAddRepo },
+    { name: "remove_repo", description: t.toolRemoveRepo },
+    { name: "sync_repo", description: t.toolSyncRepo },
+    { name: "get_sync_status", description: t.toolGetSyncStatus },
+    { name: "get_base_dir", description: t.toolGetBaseDir },
+    { name: "set_base_dir", description: t.toolSetBaseDir },
+  ];
+
   async function copyText(text: string, marker: string) {
     try {
       await navigator.clipboard.writeText(text);
@@ -71,18 +70,16 @@ export function McpPage({ token }: { token: string }) {
 
   return (
     <div className="mx-auto max-w-3xl space-y-4 p-6">
-      <h1 className="text-lg font-semibold">MCP</h1>
+      <h1 className="text-lg font-semibold">{t.mcpTitle}</h1>
 
       <Card>
         <CardHeader>
-          <CardTitle>连接配置</CardTitle>
-          <CardDescription>
-            Agent 通过 MCP stdio 方式连接本软件（APIKEY 鉴权），可管理仓库并触发同步
-          </CardDescription>
+          <CardTitle>{t.mcpConnConfig}</CardTitle>
+          <CardDescription>{t.mcpConnDesc}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-1.5">
-            <div className="text-sm font-medium">API Key</div>
+            <div className="text-sm font-medium">{t.mcpApiKey}</div>
             <div className="flex items-center gap-2">
               <code className="min-w-0 flex-1 truncate rounded-md border bg-muted/50 px-3 py-2 font-mono text-xs">
                 {mcp?.apiKey ?? "…"}
@@ -90,20 +87,20 @@ export function McpPage({ token }: { token: string }) {
               <Button
                 variant="outline"
                 size="icon"
-                title="复制"
+                title={t.copy}
                 onClick={() => mcp && copyText(mcp.apiKey, "key")}
               >
                 <IconCopy />
               </Button>
-              <Button variant="outline" size="icon" title="重新生成" onClick={handleRegenerateKey}>
+              <Button variant="outline" size="icon" title={t.refresh} onClick={handleRegenerateKey}>
                 <IconRefresh />
               </Button>
             </div>
-            {copied === "key" && <p className="text-xs text-success">已复制到剪贴板</p>}
+            {copied === "key" && <p className="text-xs text-success">{t.copied}</p>}
           </div>
 
           <div className="space-y-1.5">
-            <div className="text-sm font-medium">MCP 客户端配置示例</div>
+            <div className="text-sm font-medium">{t.mcpExample}</div>
             <div className="relative">
               <pre className="overflow-x-auto rounded-md border bg-muted/50 p-3 pr-12 font-mono text-xs leading-relaxed">
                 {example || "…"}
@@ -112,35 +109,33 @@ export function McpPage({ token }: { token: string }) {
                 variant="outline"
                 size="icon"
                 className="absolute right-2 top-2"
-                title="复制配置"
+                title={t.copy}
                 onClick={() => copyText(example, "config")}
               >
                 <IconCopy />
               </Button>
             </div>
-            {copied === "config" && <p className="text-xs text-success">已复制到剪贴板</p>}
-            <p className="text-xs text-muted-foreground">
-              将以上配置加入 MCP 客户端后，Agent 以子进程方式运行本程序的 mcp 模式（stdio 通信）。
-            </p>
+            {copied === "config" && <p className="text-xs text-success">{t.copied}</p>}
+            <p className="text-xs text-muted-foreground">{t.mcpExampleDesc}</p>
           </div>
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle>可用工具</CardTitle>
-          <CardDescription>MCP 提供以下工具供 Agent 调用</CardDescription>
+          <CardTitle>{t.mcpTools}</CardTitle>
+          <CardDescription>{t.mcpToolsDesc}</CardDescription>
         </CardHeader>
         <CardContent>
           <Table>
             <TableHeader>
               <TableRow className="hover:bg-transparent">
-                <TableHead className="w-44">工具名</TableHead>
-                <TableHead>说明</TableHead>
+                <TableHead className="w-44">{t.mcpColTool}</TableHead>
+                <TableHead>{t.mcpColDesc}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {MCP_TOOLS.map((tool) => (
+              {tools.map((tool) => (
                 <TableRow key={tool.name}>
                   <TableCell className="font-mono text-xs font-medium">{tool.name}</TableCell>
                   <TableCell className="text-muted-foreground">{tool.description}</TableCell>

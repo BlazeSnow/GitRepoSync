@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "@/lib/api";
 import type { Repo, SyncEvent, SyncStatus } from "@/lib/types";
-import { formatRelative } from "@/lib/utils";
+import { useI18n, relativeTime } from "@/i18n";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -33,30 +33,10 @@ import {
 import { ContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { IconPlus, IconRefresh, IconSquare } from "@/components/icons";
 
-const STALE_OPTIONS = [
-  { value: "all", label: "全部仓库", days: 0 },
-  { value: "1", label: "1 天内未同步", days: 1 },
-  { value: "3", label: "3 天内未同步", days: 3 },
-  { value: "7", label: "7 天内未同步", days: 7 },
-  { value: "30", label: "30 天内未同步", days: 30 },
-];
-
-const STATUS_BADGE: Record<SyncStatus, { label: string; variant: "secondary" | "success" | "destructive" | "outline" | "default" }> = {
-  idle: { label: "未同步", variant: "outline" },
-  running: { label: "同步中", variant: "secondary" },
-  success: { label: "成功", variant: "success" },
-  failed: { label: "失败", variant: "destructive" },
-  stopped: { label: "已停止", variant: "outline" },
-};
-
-interface EditState {
-  id: string | null;
-  name: string;
-  source: string;
-  target: string;
-}
+const STALE_DAYS = [1, 3, 7, 30];
 
 export function SyncPage({ token }: { token: string }) {
+  const { lang, t } = useI18n();
   const [repos, setRepos] = useState<Repo[]>([]);
   const [stale, setStale] = useState("all");
   const [edit, setEdit] = useState<EditState | null>(null);
@@ -67,6 +47,7 @@ export function SyncPage({ token }: { token: string }) {
   const load = useCallback(async () => {
     try {
       setRepos(await api.listRepos(token));
+      setError("");
     } catch (err) {
       setError(String(err));
     }
@@ -83,9 +64,9 @@ export function SyncPage({ token }: { token: string }) {
   }, [load]);
 
   const staleIds = useMemo(() => {
-    const opt = STALE_OPTIONS.find((o) => o.value === stale);
-    if (!opt || opt.days === 0) return repos.map((r) => r.id);
-    const threshold = Date.now() - opt.days * 86400_000;
+    const days = stale === "all" ? 0 : Number(stale);
+    if (days === 0) return repos.map((r) => r.id);
+    const threshold = Date.now() - days * 86400_000;
     return repos
       .filter((r) => r.lastSynced === null || r.lastSynced < threshold)
       .map((r) => r.id);
@@ -149,16 +130,36 @@ export function SyncPage({ token }: { token: string }) {
 
   const menuItems: ContextMenuItem[] = menu
     ? [
-        { label: "编辑", onSelect: () => setEdit({ id: menu.repo.id, name: menu.repo.name, source: menu.repo.source, target: menu.repo.target }) },
         {
-          label: "立即同步",
+          label: t.editRepo,
+          onSelect: () =>
+            setEdit({
+              id: menu.repo.id,
+              name: menu.repo.name,
+              source: menu.repo.source,
+              target: menu.repo.target,
+            }),
+        },
+        {
+          label: t.startSync,
           onSelect: () => {
             void api.startSync(token, [menu.repo.id]).then(load);
           },
         },
-        { label: "删除", danger: true, onSelect: () => setDeleteTarget(menu.repo) },
+        { label: t.confirmDelete, danger: true, onSelect: () => setDeleteTarget(menu.repo) },
       ]
     : [];
+
+  const statusBadge: Record<
+    SyncStatus,
+    { label: string; variant: "secondary" | "success" | "destructive" | "outline" }
+  > = {
+    idle: { label: t.statusIdle, variant: "outline" },
+    running: { label: t.statusRunning, variant: "secondary" },
+    success: { label: t.statusSuccess, variant: "success" },
+    failed: { label: t.statusFailed, variant: "destructive" },
+    stopped: { label: t.statusStopped, variant: "outline" },
+  };
 
   const running = repos.some((r) => r.lastStatus === "running");
 
@@ -167,20 +168,21 @@ export function SyncPage({ token }: { token: string }) {
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <Button onClick={handleStartSync} disabled={staleIds.length === 0}>
           <IconRefresh />
-          开始同步{stale !== "all" ? `（${staleIds.length} 个）` : ""}
+          {stale === "all" ? t.startSync : t.startSyncCount(staleIds.length)}
         </Button>
         <Button variant="outline" onClick={handleStopSync} disabled={!running}>
           <IconSquare className="h-3.5 w-3.5" />
-          停止同步
+          {t.stopSync}
         </Button>
         <Select value={stale} onValueChange={setStale}>
-          <SelectTrigger className="w-44">
-            <SelectValue placeholder="选择同步范围" />
+          <SelectTrigger className="w-48">
+            <SelectValue placeholder={t.staleAll} />
           </SelectTrigger>
           <SelectContent>
-            {STALE_OPTIONS.map((o) => (
-              <SelectItem key={o.value} value={o.value}>
-                {o.label}
+            <SelectItem value="all">{t.staleAll}</SelectItem>
+            {STALE_DAYS.map((d) => (
+              <SelectItem key={d} value={String(d)}>
+                {t.staleDays(d)}
               </SelectItem>
             ))}
           </SelectContent>
@@ -191,7 +193,7 @@ export function SyncPage({ token }: { token: string }) {
           onClick={() => setEdit({ id: null, name: "", source: "", target: "" })}
         >
           <IconPlus />
-          添加仓库
+          {t.addRepo}
         </Button>
       </div>
 
@@ -201,46 +203,62 @@ export function SyncPage({ token }: { token: string }) {
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead className="w-52">仓库</TableHead>
-              <TableHead>源地址</TableHead>
-              <TableHead>目标地址</TableHead>
-              <TableHead className="w-24">状态</TableHead>
-              <TableHead className="w-32">上次同步</TableHead>
+              <TableHead className="w-52">{t.colRepo}</TableHead>
+              <TableHead>{t.colSource}</TableHead>
+              <TableHead>{t.colTarget}</TableHead>
+              <TableHead className="w-24">{t.colStatus}</TableHead>
+              <TableHead className="w-32">{t.colLastSynced}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {repos.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={5} className="h-32 text-center text-muted-foreground">
-                  暂无仓库，点击右上角“添加仓库”开始
+                  {t.syncEmpty}
                 </TableCell>
               </TableRow>
             ) : (
               repos.map((repo) => {
-                const badge = STATUS_BADGE[repo.lastStatus] ?? STATUS_BADGE.idle;
+                const badge = statusBadge[repo.lastStatus] ?? statusBadge.idle;
                 return (
                   <TableRow
                     key={repo.id}
                     className="cursor-default select-none"
                     onDoubleClick={() =>
-                      setEdit({ id: repo.id, name: repo.name, source: repo.source, target: repo.target })
+                      setEdit({
+                        id: repo.id,
+                        name: repo.name,
+                        source: repo.source,
+                        target: repo.target,
+                      })
                     }
                     onContextMenu={(e) => openMenu(e, repo)}
                     title={repo.lastMessage ?? undefined}
                   >
                     <TableCell className="font-medium">{repo.name}</TableCell>
-                    <TableCell className="max-w-0 truncate text-muted-foreground" title={repo.source}>
+                    <TableCell
+                      className="max-w-0 truncate text-muted-foreground"
+                      title={repo.source}
+                    >
                       {repo.source}
                     </TableCell>
-                    <TableCell className="max-w-0 truncate text-muted-foreground" title={repo.target}>
+                    <TableCell
+                      className="max-w-0 truncate text-muted-foreground"
+                      title={repo.target}
+                    >
                       {repo.target}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={badge.variant} className={repo.lastStatus === "running" ? "animate-pulse" : ""}>
+                      <Badge
+                        variant={badge.variant}
+                        className={repo.lastStatus === "running" ? "animate-pulse" : ""}
+                      >
                         {badge.label}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-muted-foreground">{formatRelative(repo.lastSynced)}</TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {relativeTime(repo.lastSynced, lang)}
+                    </TableCell>
                   </TableRow>
                 );
               })
@@ -254,46 +272,43 @@ export function SyncPage({ token }: { token: string }) {
       <Dialog open={edit !== null} onOpenChange={(open) => !open && setEdit(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{edit?.id ? "编辑仓库" : "添加仓库"}</DialogTitle>
-            <DialogDescription>
-              同步流程：从源仓库拉取到本地基地址中转（更新 LFS 与
-              submodule），再推送到目标仓库。目标地址为目标仓库的 Git URL。
-            </DialogDescription>
+            <DialogTitle>{edit?.id ? t.editRepo : t.addRepoTitle}</DialogTitle>
+            <DialogDescription>{t.repoFlowDesc}</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-1.5">
-              <Label htmlFor="repo-name">仓库名称</Label>
+              <Label htmlFor="repo-name">{t.fieldName}</Label>
               <Input
                 id="repo-name"
                 value={edit?.name ?? ""}
                 onChange={(e) => setEdit((s) => (s ? { ...s, name: e.target.value } : s))}
-                placeholder="my-repo"
+                placeholder={t.placeholderName}
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="repo-source">源地址</Label>
+              <Label htmlFor="repo-source">{t.fieldSource}</Label>
               <Input
                 id="repo-source"
                 value={edit?.source ?? ""}
                 onChange={(e) => setEdit((s) => (s ? { ...s, source: e.target.value } : s))}
-                placeholder="https://github.com/user/repo.git"
+                placeholder={t.placeholderSource}
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="repo-target">目标地址</Label>
+              <Label htmlFor="repo-target">{t.fieldTarget}</Label>
               <Input
                 id="repo-target"
                 value={edit?.target ?? ""}
                 onChange={(e) => setEdit((s) => (s ? { ...s, target: e.target.value } : s))}
-                placeholder="https://git.example.com/backup/repo.git"
+                placeholder={t.placeholderTarget}
               />
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEdit(null)}>
-              取消
+              {t.cancel}
             </Button>
-            <Button onClick={handleSave}>保存</Button>
+            <Button onClick={handleSave}>{t.save}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -301,21 +316,28 @@ export function SyncPage({ token }: { token: string }) {
       <Dialog open={deleteTarget !== null} onOpenChange={(open) => !open && setDeleteTarget(null)}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>删除仓库</DialogTitle>
+            <DialogTitle>{t.deleteRepo}</DialogTitle>
             <DialogDescription>
-              确定要删除仓库“{deleteTarget?.name}”吗？仅移除记录，不会删除本地文件。
+              {deleteTarget && t.deleteRepoDesc(deleteTarget.name)}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteTarget(null)}>
-              取消
+              {t.cancel}
             </Button>
             <Button variant="destructive" onClick={handleDelete}>
-              删除
+              {t.confirmDelete}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
   );
+}
+
+interface EditState {
+  id: string | null;
+  name: string;
+  source: string;
+  target: string;
 }

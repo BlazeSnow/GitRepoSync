@@ -11,6 +11,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { IconRefresh } from "@/components/icons";
+import { useI18n } from "@/i18n";
 
 function formatDateTime(ms: number): string {
   const d = new Date(ms);
@@ -21,6 +22,7 @@ function formatDateTime(ms: number): string {
 }
 
 export function LogsPage({ token }: { token: string }) {
+  const { t } = useI18n();
   const [logs, setLogs] = useState<OperationLog[]>([]);
   const [error, setError] = useState("");
 
@@ -40,12 +42,12 @@ export function LogsPage({ token }: { token: string }) {
   return (
     <div className="flex h-full flex-col p-6">
       <div className="mb-4 flex items-center gap-3">
-        <h1 className="text-lg font-semibold">日志</h1>
-        <span className="text-xs text-muted-foreground">按时间倒序，最近 500 条</span>
+        <h1 className="text-lg font-semibold">{t.logsTitle}</h1>
+        <span className="text-xs text-muted-foreground">{t.logsRecent}</span>
         <div className="flex-1" />
         <Button variant="outline" size="sm" onClick={() => void load()}>
           <IconRefresh />
-          刷新
+          {t.refresh}
         </Button>
       </div>
 
@@ -55,16 +57,16 @@ export function LogsPage({ token }: { token: string }) {
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead className="w-56">操作时间</TableHead>
-              <TableHead>操作</TableHead>
-              <TableHead className="w-40">操作人</TableHead>
+              <TableHead className="w-56">{t.colTime}</TableHead>
+              <TableHead>{t.colAction}</TableHead>
+              <TableHead className="w-40">{t.colOperator}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {logs.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={3} className="h-32 text-center text-muted-foreground">
-                  暂无操作记录
+                  {t.logsEmpty}
                 </TableCell>
               </TableRow>
             ) : (

@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { LangButton, useI18n } from "@/i18n";
 import {
   IconBranch,
   IconCloud,
@@ -10,16 +11,7 @@ import {
   IconSettings,
   Logo,
 } from "@/components/icons";
-
-export type PageKey = "sync" | "providers" | "logs" | "mcp" | "settings";
-
-const NAV_ITEMS: { key: PageKey; label: string; icon: (cls: string) => ReactNode }[] = [
-  { key: "sync", label: "同步仓库", icon: (cls) => <IconBranch className={cls} /> },
-  { key: "providers", label: "提供商", icon: (cls) => <IconCloud className={cls} /> },
-  { key: "logs", label: "日志", icon: (cls) => <IconList className={cls} /> },
-  { key: "mcp", label: "MCP", icon: (cls) => <IconPlug className={cls} /> },
-  { key: "settings", label: "设置", icon: (cls) => <IconSettings className={cls} /> },
-];
+import type { PageKey } from "@/lib/types";
 
 export function Layout({
   page,
@@ -36,6 +28,14 @@ export function Layout({
   onLogout: () => void;
   children: ReactNode;
 }) {
+  const { t } = useI18n();
+  const NAV_ITEMS: { key: PageKey; label: string; icon: (cls: string) => ReactNode }[] = [
+    { key: "sync", label: t.navSync, icon: (cls) => <IconBranch className={cls} /> },
+    { key: "providers", label: t.navProviders, icon: (cls) => <IconCloud className={cls} /> },
+    { key: "logs", label: t.navLogs, icon: (cls) => <IconList className={cls} /> },
+    { key: "mcp", label: t.navMcp, icon: (cls) => <IconPlug className={cls} /> },
+    { key: "settings", label: t.navSettings, icon: (cls) => <IconSettings className={cls} /> },
+  ];
   return (
     <div className="flex h-full">
       <aside className="flex w-52 shrink-0 flex-col border-r bg-muted/30">
@@ -63,11 +63,12 @@ export function Layout({
             </button>
           ))}
         </nav>
-        <div className="border-t px-3 py-3">
-          <div className="mb-1.5 px-1 text-xs text-muted-foreground">当前用户：{username}</div>
+        <div className="space-y-2 border-t px-3 py-3">
+          <LangButton />
+          <div className="px-1 text-xs text-muted-foreground">{t.currentUser(username)}</div>
           <Button variant="ghost" size="sm" className="w-full justify-start" onClick={onLogout}>
             <IconLogout className="h-4 w-4" />
-            退出登录
+            {t.signOut}
           </Button>
         </div>
       </aside>

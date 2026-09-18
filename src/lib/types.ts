@@ -1,3 +1,5 @@
+export type PageKey = "sync" | "providers" | "logs" | "mcp" | "settings";
+
 export type SyncStatus = "idle" | "running" | "success" | "failed" | "stopped";
 
 export interface Repo {

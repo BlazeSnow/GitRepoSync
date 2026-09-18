@@ -1,9 +1,11 @@
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use uuid::Uuid;
+
+use crate::lang::Lang;
 
 /// std::sync::Mutex 带毒恢复锁：后台线程持有锁时 panic 不应拖垮整个应用
 pub fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -41,11 +43,26 @@ pub struct SyncHandle {
     pub child: Mutex<Option<std::process::Child>>,
 }
 
+/// 同步队列中的一个任务（仓库串行处理，避免并发拉取抢占网络）
+#[derive(Clone)]
+pub struct SyncJob {
+    pub repo_id: String,
+    pub operator: String,
+    pub lang: Lang,
+}
+
+#[derive(Default)]
+pub struct SyncQueue {
+    pub jobs: VecDeque<SyncJob>,
+    pub worker_active: bool,
+}
+
 pub struct AppState {
     pub conn: Mutex<Connection>,
     pub sync_procs: Mutex<HashMap<String, Arc<SyncHandle>>>,
     pub syncing: Mutex<HashSet<String>>,
     pub stop_requested: Mutex<HashSet<String>>,
+    pub sync_queue: Mutex<SyncQueue>,
 }
 
 pub const DEFAULT_BASE_DIR: &str = "~/repo";
@@ -67,6 +84,7 @@ impl AppState {
             sync_procs: Mutex::new(HashMap::new()),
             syncing: Mutex::new(HashSet::new()),
             stop_requested: Mutex::new(HashSet::new()),
+            sync_queue: Mutex::new(SyncQueue::default()),
         };
         state.seed();
         Ok(state)

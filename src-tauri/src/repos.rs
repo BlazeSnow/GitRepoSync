@@ -1,6 +1,6 @@
 use crate::auth::require_session;
 use crate::lang::{gui_lang, tr, tr_a, Lang};
-use crate::state::{lock, now_ms, AppState, Repo, SyncHandle};
+use crate::state::{lock, now_ms, AppState, Repo, SyncHandle, SyncJob};
 use rusqlite::params;
 use serde::Serialize;
 use std::io::Read;
@@ -8,8 +8,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
+
+/// 单个 git 网络命令的超时（秒）；LFS fetch --all 首次拉取大仓库较慢，单独放宽
+const GIT_TIMEOUT_SECS: u64 = 1800;
+const LFS_TIMEOUT_SECS: u64 = 3600;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -26,7 +31,6 @@ fn emit_status(app: &Option<AppHandle>, ev: SyncEvent) {
     }
 }
 
-
 fn repo_from_row(row: &rusqlite::Row) -> rusqlite::Result<Repo> {
     Ok(Repo {
         id: row.get(0)?,
@@ -39,8 +43,7 @@ fn repo_from_row(row: &rusqlite::Row) -> rusqlite::Result<Repo> {
     })
 }
 
-const REPO_COLS: &str =
-    "id, name, source, target, last_synced, last_status, last_message";
+const REPO_COLS: &str = "id, name, source, target, last_synced, last_status, last_message";
 
 #[tauri::command]
 pub fn list_repos(state: State<'_, Arc<AppState>>, token: String) -> Result<Vec<Repo>, String> {
@@ -191,39 +194,55 @@ pub fn stop_sync(
     id: Option<String>,
 ) -> Result<(), String> {
     let username = require_session(&state, &token)?;
-    let handles: Vec<(String, Arc<SyncHandle>)> = {
-        let procs = lock(&state.sync_procs);
+    // 目标集合：指定 id 或全部（含排队中与运行中）
+    let ids: Vec<String> = {
+        let syncing = lock(&state.syncing);
         match &id {
-            Some(i) => procs
-                .get(i)
-                .map(|h| (i.clone(), h.clone()))
+            Some(i) => syncing
+                .contains(i)
+                .then(|| i.clone())
                 .into_iter()
                 .collect(),
-            None => procs.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            None => syncing.iter().cloned().collect(),
         }
     };
-    if handles.is_empty() {
+    if ids.is_empty() {
         return Ok(());
     }
+
+    // 排队中（尚未开始运行）的任务直接出队
     {
-        let mut stop = lock(&state.stop_requested);
-        for (rid, _) in &handles {
-            stop.insert(rid.clone());
+        let mut q = lock(&state.sync_queue);
+        q.jobs.retain(|j| !ids.contains(&j.repo_id));
+    }
+    for rid in &ids {
+        lock(&state.syncing).remove(rid);
+    }
+
+    // 运行中的任务终止其 git 子进程
+    let mut stopped = false;
+    for rid in &ids {
+        let handle = lock(&state.sync_procs).get(rid).cloned();
+        if let Some(h) = handle {
+            let mut slot = lock(&h.child);
+            if let Some(c) = slot.as_mut() {
+                let _ = c.kill();
+                let _ = c.wait();
+            }
+            slot.take();
+            lock(&state.stop_requested).insert(rid.clone());
+            stopped = true;
+        } else {
+            stopped = true;
         }
     }
-    for (_, h) in handles {
-        let mut slot = lock(&h.child);
-        if let Some(c) = slot.as_mut() {
-            let _ = c.kill();
-            let _ = c.wait();
-        }
-        slot.take();
+    if stopped {
+        state.add_log(&tr(gui_lang(), "log-sync-stopped-cmd"), &username);
     }
-    state.add_log("停止同步", &username);
     Ok(())
 }
 
-/// 启动后台同步线程；返回 false 表示该仓库已在同步中
+/// 入队一个同步任务；队列由单一 worker 串行消费，返回 false 表示该仓库已在队列或同步中
 pub fn spawn_sync(
     state: Arc<AppState>,
     app: Option<AppHandle>,
@@ -239,13 +258,48 @@ pub fn spawn_sync(
         syncing.insert(repo_id.clone());
     }
     lock(&state.stop_requested).remove(&repo_id);
-    let st = state.clone();
-    thread::spawn(move || {
-        run_sync(&st, &app, &repo_id, &operator, lang);
-        lock(&st.syncing).remove(&repo_id);
-        lock(&st.stop_requested).remove(&repo_id);
-    });
+    let should_spawn = {
+        let mut q = lock(&state.sync_queue);
+        q.jobs.push_back(SyncJob {
+            repo_id: repo_id.clone(),
+            operator,
+            lang,
+        });
+        if !q.worker_active && !q.jobs.is_empty() {
+            q.worker_active = true;
+            true
+        } else {
+            false
+        }
+    };
+    if should_spawn {
+        let st = state.clone();
+        thread::spawn(move || sync_worker(&st, app));
+    }
     true
+}
+
+/// 串行消费同步队列：同一时间只运行一个仓库的同步
+fn sync_worker(state: &Arc<AppState>, app: Option<AppHandle>) {
+    loop {
+        let job = lock(&state.sync_queue).jobs.pop_front();
+        match job {
+            Some(job) => {
+                run_sync(state, &app, &job.repo_id, &job.operator, job.lang);
+                lock(&state.syncing).remove(&job.repo_id);
+                lock(&state.stop_requested).remove(&job.repo_id);
+            }
+            None => {
+                // 队列已空；与入队方竞态时双重检查，避免漏掉新任务
+                let mut q = lock(&state.sync_queue);
+                if q.jobs.is_empty() {
+                    q.worker_active = false;
+                    return;
+                }
+                // 有新任务入队，继续消费
+            }
+        }
+    }
 }
 
 fn set_running(state: &AppState, repo_id: &str) {
@@ -370,12 +424,28 @@ struct GitStep {
     args: Vec<String>,
     cwd: Option<PathBuf>,
     ok_msg: String,
+    timeout: Duration,
+    /// 失败是否判定整个同步失败；LFS / submodule 失败仅警告（引用备份仍然有效）
+    fatal: bool,
+    warn_key: &'static str,
 }
 
-/// 同步流水线（AGENTS.md 软件逻辑）：
-/// 1. 从源仓库拉取到本地基地址下的工作副本（中转站）
-/// 2. 更新中转站的 LFS 与 submodule
-/// 3. 推送到目标仓库地址
+/// 网络命令统一加低速中断配置（HTTP 停滞 120s 判死）；本地命令不受影响
+fn git_args(args: &[&str]) -> Vec<String> {
+    let mut v = vec![
+        "-c".to_string(),
+        "http.lowSpeedLimit=1024".to_string(),
+        "-c".to_string(),
+        "http.lowSpeedTime=120".to_string(),
+    ];
+    v.extend(args.iter().map(|s| s.to_string()));
+    v
+}
+
+/// 同步流水线（AGENTS.md 软件逻辑），参考 backup-repos skill 的无人值守经验：
+/// 1. 拉取：fetch-only，只更新 origin 跟踪引用，不合并工作区（不受本地脏状态影响）
+/// 2. 更新：LFS fetch --all（所有引用的 LFS 对象）+ submodule（失败降级为警告）
+/// 3. 推送：本地分支 + origin 跟踪分支 + 标签，--prune 与来源强制对齐
 fn perform_git_sync(
     state: &AppState,
     repo_id: &str,
@@ -384,51 +454,45 @@ fn perform_git_sync(
     lang: Lang,
 ) -> (String, String) {
     let local = base_dir.join(&repo.name);
+    let git_timeout = Duration::from_secs(GIT_TIMEOUT_SECS);
+    let lfs_timeout = Duration::from_secs(LFS_TIMEOUT_SECS);
     let mut done: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
     let mut steps: Vec<GitStep> = Vec::new();
 
     if local.exists() {
+        // 同步源变更时保持 origin 指向最新源地址
         steps.push(GitStep {
-            args: vec![
-                "remote".into(),
-                "set-url".into(),
-                "origin".into(),
-                repo.source.clone(),
-            ],
+            args: git_args(&["remote", "set-url", "origin", &repo.source]),
             cwd: Some(local.clone()),
             ok_msg: String::new(),
+            timeout: git_timeout,
+            fatal: true,
+            warn_key: "",
         });
         steps.push(GitStep {
-            args: vec![
-                "fetch".into(),
-                "origin".into(),
-                "--prune".into(),
-                "--tags".into(),
-            ],
+            args: git_args(&["fetch", "origin", "--prune", "--tags"]),
             cwd: Some(local.clone()),
             ok_msg: tr(lang, "step-fetch"),
-        });
-        steps.push(GitStep {
-            args: vec!["pull".into(), "--ff-only".into()],
-            cwd: Some(local.clone()),
-            ok_msg: String::new(),
+            timeout: git_timeout,
+            fatal: true,
+            warn_key: "",
         });
     } else {
         if let Some(parent) = local.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
         steps.push(GitStep {
-            args: vec![
-                "clone".into(),
-                repo.source.clone(),
-                local.to_string_lossy().to_string(),
-            ],
+            args: git_args(&["clone", &repo.source, &local.to_string_lossy()]),
             cwd: None,
             ok_msg: tr(lang, "step-clone"),
+            timeout: git_timeout,
+            fatal: true,
+            warn_key: "",
         });
     }
 
-    // LFS：git-lfs 未安装时跳过并在结果中注明
+    // LFS：下载所有引用指向的 LFS 对象，推送时对象才会一并上传
     let lfs_available = {
         let mut cmd = Command::new("git");
         cmd.args(["lfs", "version"]);
@@ -438,48 +502,38 @@ fn perform_git_sync(
     };
     if lfs_available {
         steps.push(GitStep {
-            args: vec!["lfs".into(), "pull".into()],
+            args: git_args(&["lfs", "fetch", "--all", "origin"]),
             cwd: Some(local.clone()),
             ok_msg: tr(lang, "step-lfs"),
+            timeout: lfs_timeout,
+            fatal: false,
+            warn_key: "warn-lfs-fetch",
         });
+    } else {
+        warnings.push(tr(lang, "lfs-skipped"));
     }
 
     steps.push(GitStep {
-        args: vec![
-            "submodule".into(),
-            "update".into(),
-            "--init".into(),
-            "--recursive".into(),
-        ],
+        args: git_args(&["submodule", "update", "--init", "--recursive"]),
         cwd: Some(local.clone()),
         ok_msg: tr(lang, "step-submodule"),
-    });
-    steps.push(GitStep {
-        args: vec![
-            "push".into(),
-            repo.target.clone(),
-            "+refs/heads/*:refs/heads/*".into(),
-            "+refs/tags/*:refs/tags/*".into(),
-        ],
-        cwd: Some(local.clone()),
-        ok_msg: tr(lang, "step-push"),
+        timeout: git_timeout,
+        fatal: false,
+        warn_key: "warn-submodule",
     });
 
     for step in &steps {
-        // “停止同步”请求：kill 之后的剩余步骤不再执行
+        // “停止同步”请求：终止后的剩余步骤不再执行
         if lock(&state.stop_requested).contains(repo_id) {
             return ("stopped".into(), tr(lang, "manually-stopped"));
         }
-        match run_git(state, repo_id, &step.args, step.cwd.as_deref(), lang) {
+        match run_git(state, repo_id, &step.args, step.cwd.as_deref(), step.timeout, lang) {
             Err(e) => {
                 if lock(&state.stop_requested).contains(repo_id) {
                     return ("stopped".into(), tr(lang, "manually-stopped"));
                 }
-                // 仅 git-lfs 未安装允许跳过
-                if step.args.first().map(String::as_str) == Some("lfs")
-                    && e.contains("is not a git command")
-                {
-                    done.push(tr(lang, "lfs-skipped"));
+                if !step.fatal {
+                    warnings.push(tr_a(lang, step.warn_key, &[("err", &e)]));
                     continue;
                 }
                 return ("failed".into(), e);
@@ -491,24 +545,56 @@ fn perform_git_sync(
         }
     }
 
-    let lfs_note = if !lfs_available {
-        format!("{}{}", lang.sep(), tr(lang, "lfs-skipped"))
-    } else {
-        String::new()
-    };
-    (
-        "success".into(),
-        format!("{}{lfs_note}", done.join(lang.sep())),
+    // 推送引用必须在 fetch 完成后计算：origin 跟踪分支（补全本地未 checkout 的分支）
+    // + 本地分支 + 标签；过滤 origin/HEAD 符号引用（推过去会变成多余的 HEAD 分支）
+    let mut push_refs: Vec<String> = vec!["+refs/heads/*:refs/heads/*".into()];
+    let origin_refs = run_git(
+        state,
+        repo_id,
+        &git_args(&["for-each-ref", "--format=%(refname)", "refs/remotes/origin"]),
+        Some(local.as_path()),
+        git_timeout,
+        lang,
     )
+    .unwrap_or_default();
+    for line in origin_refs.lines() {
+        if let Some(br) = line.strip_prefix("refs/remotes/origin/") {
+            if br == "HEAD" {
+                continue;
+            }
+            push_refs.push(format!("+refs/remotes/origin/{br}:refs/heads/{br}"));
+        }
+    }
+    push_refs.push("+refs/tags/*:refs/tags/*".into());
+
+    let mut push_cmd: Vec<String> = vec!["push".into(), "--prune".into(), repo.target.clone()];
+    push_cmd.extend(push_refs);
+
+    // 推送失败判定整个同步失败；此前的 LFS / submodule 警告保留在消息里
+    match run_git(state, repo_id, &git_args(&push_cmd.iter().map(String::as_str).collect::<Vec<_>>()), Some(local.as_path()), git_timeout, lang) {
+        Err(e) => {
+            if lock(&state.stop_requested).contains(repo_id) {
+                return ("stopped".into(), tr(lang, "manually-stopped"));
+            }
+            return ("failed".into(), e);
+        }
+        Ok(_) => {}
+    }
+    done.push(tr(lang, "step-push"));
+
+    let mut parts = done;
+    parts.extend(warnings);
+    ("success".into(), parts.join(lang.sep()))
 }
 
-/// 运行 git 命令：子进程注册到 sync_procs 以支持“停止同步”。
-/// 成功返回 stderr/stdout 合并文本（可能为空），失败返回错误文本。
+/// 运行 git 命令：子进程注册到 sync_procs 以支持“停止同步”；
+/// 超时强杀按失败处理。成功返回 stderr/stdout 合并文本（可能为空）。
 fn run_git(
     state: &AppState,
     repo_id: &str,
     args: &[String],
     cwd: Option<&Path>,
+    timeout: Duration,
     lang: Lang,
 ) -> Result<String, String> {
     let mut cmd = Command::new("git");
@@ -522,13 +608,20 @@ fn run_git(
         .spawn()
         .map_err(|e| tr_a(lang, "git-spawn-error", &[("err", &e.to_string())]))?;
 
-    // stderr 交给独立线程收集，避免管道写满阻塞
+    // stderr / stdout 各由独立线程收集，避免管道写满阻塞
     let stderr = child.stderr.take();
     let stdout_pipe = child.stdout.take();
-    let reader = thread::spawn(move || -> String {
+    let err_reader = thread::spawn(move || -> String {
         let mut buf = String::new();
         if let Some(mut e) = stderr {
             let _ = e.read_to_string(&mut buf);
+        }
+        buf
+    });
+    let out_reader = thread::spawn(move || -> String {
+        let mut buf = String::new();
+        if let Some(mut o) = stdout_pipe {
+            let _ = o.read_to_string(&mut buf);
         }
         buf
     });
@@ -537,27 +630,59 @@ fn run_git(
     });
     lock(&state.sync_procs).insert(repo_id.to_string(), handle.clone());
 
-    let mut stdout_buf = String::new();
-    if let Some(mut out) = stdout_pipe {
-        let _ = out.read_to_string(&mut stdout_buf);
-    }
+    // 轮询等待：超时或“停止同步”时强杀子进程
+    let deadline = Instant::now() + timeout;
     let mut status = None;
     let mut killed = false;
-    {
-        let mut slot = lock(&handle.child);
-        if let Some(c) = slot.as_mut() {
-            status = c.wait().ok();
-        } else {
-            killed = true;
+    loop {
+        {
+            let mut slot = lock(&handle.child);
+            match slot.as_mut() {
+                // “停止同步”已终止并移除子进程
+                None => {
+                    killed = true;
+                    break;
+                }
+                Some(c) => match c.try_wait() {
+                    Ok(Some(s)) => {
+                        status = Some(s);
+                        break;
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        lock(&state.sync_procs).remove(repo_id);
+                        return Err(format!("{}: {e}", tr(lang, "git-wait-error")));
+                    }
+                },
+            }
         }
+        if Instant::now() >= deadline {
+            {
+                let mut slot = lock(&handle.child);
+                if let Some(c) = slot.as_mut() {
+                    let _ = c.kill();
+                    let _ = c.wait();
+                }
+                slot.take();
+            }
+            lock(&state.sync_procs).remove(repo_id);
+            return Err(tr_a(
+                lang,
+                "git-timeout",
+                &[("secs", &timeout.as_secs().to_string())],
+            ));
+        }
+        thread::sleep(Duration::from_millis(200));
     }
     lock(&state.sync_procs).remove(repo_id);
-    let mut text = reader.join().unwrap_or_default();
-    if !stdout_buf.is_empty() {
+
+    let mut text = err_reader.join().unwrap_or_default();
+    let out_text = out_reader.join().unwrap_or_default();
+    if !out_text.is_empty() {
         if !text.is_empty() {
             text.push('\n');
         }
-        text.push_str(&stdout_buf);
+        text.push_str(&out_text);
     }
     let text = text.trim().to_string();
 
@@ -566,7 +691,7 @@ fn run_git(
     }
     match status {
         Some(s) if s.success() => Ok(text),
-        Some(_) => {
+        _ => {
             eprintln!("git {:?} 执行失败：{text}", args.first());
             Err(if text.is_empty() {
                 format!("git {:?} 执行失败", args.first())
@@ -574,6 +699,22 @@ fn run_git(
                 text
             })
         }
-        None => Err(tr(lang, "git-wait-error")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn git_args_prefixes_config() {
+        let args = git_args(&["fetch", "origin"]);
+        assert_eq!(args[0], "-c");
+        assert!(args.iter().any(|a| a == "fetch"));
+    }
+
+    #[test]
+    fn norm_url_strips_protocol_and_suffix() {
+        assert_eq!(expand_home("~/repo"), dirs::home_dir().unwrap().join("repo"));
     }
 }

@@ -38,6 +38,9 @@ step-push = 推送到目标仓库
 lfs-skipped = 未检测到 git-lfs，已跳过 LFS 更新
 manually-stopped = 已手动停止
 git-spawn-error = 无法启动 git：{$err}（请确认系统已安装 Git 并加入 PATH）
+git-timeout = git 命令超时（{$secs} 秒）
+warn-submodule = ⚠ submodule 更新失败，已跳过：{$err}
+warn-lfs-fetch = ⚠ LFS 拉取失败，仅备份指针文件：{$err}
 git-wait-error = 等待 git 进程失败
 process-terminated = 进程已被终止
 

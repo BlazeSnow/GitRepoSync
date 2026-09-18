@@ -6,17 +6,21 @@
 
 ## 1. 软件逻辑（同步流水线）
 
-按 AGENTS.md 定义的三步流水线执行：
+按 AGENTS.md 定义的三步流水线执行（无人值守语义参考 backup-repos skill）：
 
-1. **拉取**：从源仓库拉取到本地基地址下的工作副本（中转站），目录为 `{基地址}/{仓库名}`，例如 `~/repo/my-repo`
-   - 中转目录不存在：`git clone <源地址> <中转目录>`
-   - 已存在：`git remote set-url origin <源地址>`（同步源变更）→ `git fetch origin --prune --tags` → `git pull --ff-only`
+1. **拉取**：fetch-only——中转目录（`{基地址}/{仓库名}`，如 `~/repo/my-repo`）不存在时先 `git clone <源>`；随后 `git fetch origin --prune --tags` 只更新 origin 跟踪引用，**不合并工作区**，不受本地脏状态或合并冲突影响（源地址变更自动 `remote set-url`）
 2. **更新中转站**：
-   - LFS：`git lfs pull`（系统未安装 git-lfs 时跳过，并在结果消息中注明）
+   - LFS：`git lfs fetch --all origin`（下载所有引用指向的 LFS 对象）；未安装 git-lfs 时跳过并注明
    - submodule：`git submodule update --init --recursive`
-3. **推送**：`git push <目标仓库地址> +refs/heads/*:refs/heads/* +refs/tags/*:refs/tags/*`（镜像分支与标签到目标仓库）
+   - 两步失败**降级为警告**：引用已备份、内容可能不完整，不阻断推送
+3. **推送**：本地分支 + origin 跟踪分支（补全本地未 checkout 的分支）+ 标签，`--prune` 强制与来源对齐（删除来源已不存在的分支/标签）
 
-同步过程中每一步的 git 子进程可被“停止同步”终止；同步状态通过 Tauri 事件 `sync-status` 推送到前端。同步期间 `GIT_TERMINAL_PROMPT=0`，避免私有仓库卡在交互式输入。
+其他保障：
+
+- 每个网络 git 命令带超时（默认 1800s，LFS 3600s）与 HTTP 低速中断（停滞 120s 判死），超时或“停止同步”时强杀子进程
+- 多个仓库**串行**同步（内部队列依次执行），避免并发拉取抢占网络
+- 同步期间 `GIT_TERMINAL_PROMPT=0`，避免私有仓库卡在交互式输入
+- 已知限制：GitLab 目标仓库走 SSH 且含 LFS 时，LFS 对象不会随推送上传（GitLab 不支持 SSH 的 git-lfs-transfer），请改用 HTTPS 目标地址
 
 ## 2. 数据库（SQLite）
 

@@ -1,13 +1,23 @@
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { IconBranch, IconCloud, IconLogout, IconSettings, Logo } from "@/components/icons";
+import {
+  IconBranch,
+  IconCloud,
+  IconList,
+  IconLogout,
+  IconPlug,
+  IconSettings,
+  Logo,
+} from "@/components/icons";
 
-export type PageKey = "sync" | "providers" | "settings";
+export type PageKey = "sync" | "providers" | "logs" | "mcp" | "settings";
 
 const NAV_ITEMS: { key: PageKey; label: string; icon: (cls: string) => ReactNode }[] = [
   { key: "sync", label: "同步仓库", icon: (cls) => <IconBranch className={cls} /> },
   { key: "providers", label: "提供商", icon: (cls) => <IconCloud className={cls} /> },
+  { key: "logs", label: "日志", icon: (cls) => <IconList className={cls} /> },
+  { key: "mcp", label: "MCP", icon: (cls) => <IconPlug className={cls} /> },
   { key: "settings", label: "设置", icon: (cls) => <IconSettings className={cls} /> },
 ];
 

@@ -256,7 +256,8 @@ export function SyncPage({ token }: { token: string }) {
           <DialogHeader>
             <DialogTitle>{edit?.id ? "编辑仓库" : "添加仓库"}</DialogTitle>
             <DialogDescription>
-              目标地址将以 git 镜像（--mirror）方式保存，请填写一个本地路径
+              同步流程：从源仓库拉取到本地基地址中转（更新 LFS 与
+              submodule），再推送到目标仓库。目标地址为目标仓库的 Git URL。
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -284,7 +285,7 @@ export function SyncPage({ token }: { token: string }) {
                 id="repo-target"
                 value={edit?.target ?? ""}
                 onChange={(e) => setEdit((s) => (s ? { ...s, target: e.target.value } : s))}
-                placeholder="D:\backup\my-repo.git"
+                placeholder="https://git.example.com/backup/repo.git"
               />
             </div>
           </div>

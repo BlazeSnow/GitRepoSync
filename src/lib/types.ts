@@ -55,3 +55,10 @@ export interface SyncEvent {
   message: string | null;
   lastSynced: number | null;
 }
+
+export interface OperationLog {
+  id: number;
+  action: string;
+  operator: string;
+  createdAt: number;
+}

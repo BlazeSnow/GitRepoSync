@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { Layout, type PageKey } from "@/components/Layout";
 import { Login } from "@/components/Login";
+import { LogsPage } from "@/components/LogsPage";
+import { McpPage } from "@/components/McpPage";
 import { ProvidersPage } from "@/components/ProvidersPage";
 import { SettingsPage } from "@/components/SettingsPage";
 import { SyncPage } from "@/components/SyncPage";
@@ -82,6 +84,8 @@ export default function App() {
     >
       {page === "sync" && <SyncPage token={token} />}
       {page === "providers" && <ProvidersPage token={token} />}
+      {page === "logs" && <LogsPage token={token} />}
+      {page === "mcp" && <McpPage token={token} />}
       {page === "settings" && <SettingsPage token={token} username={username} />}
     </Layout>
   );

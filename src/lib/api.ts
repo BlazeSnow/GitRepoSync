@@ -4,6 +4,7 @@ import type {
   AppInfo,
   LoginResult,
   McpConfig,
+  OperationLog,
   ProviderInfo,
   Repo,
 } from "./types";
@@ -56,5 +57,14 @@ export const api = {
   },
   regenerateMcpKey(token: string) {
     return invoke<string>("regenerate_mcp_api_key", { token });
+  },
+  getBaseDir(token: string) {
+    return invoke<string>("get_base_dir", { token });
+  },
+  setBaseDir(token: string, baseDir: string) {
+    return invoke<void>("set_base_dir", { token, baseDir });
+  },
+  listLogs(token: string, limit?: number) {
+    return invoke<OperationLog[]>("list_operation_logs", { token, limit: limit ?? null });
   },
 };

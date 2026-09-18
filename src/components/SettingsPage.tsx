@@ -1,53 +1,44 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
-import type { AppInfo, McpConfig, Repo } from "@/lib/types";
+import type { AppInfo, Repo } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { IconCopy, IconRefresh } from "@/components/icons";
 
 export function SettingsPage({ token, username }: { token: string; username: string }) {
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
-  const [mcp, setMcp] = useState<McpConfig | null>(null);
   const [repos, setRepos] = useState<Repo[]>([]);
+  const [baseDir, setBaseDir] = useState("");
+  const [baseDirInput, setBaseDirInput] = useState("");
   const [oldPwd, setOldPwd] = useState("");
   const [newPwd, setNewPwd] = useState("");
   const [confirmPwd, setConfirmPwd] = useState("");
   const [pwdMsg, setPwdMsg] = useState<{ text: string; ok: boolean } | null>(null);
-  const [copied, setCopied] = useState("");
+  const [baseMsg, setBaseMsg] = useState<{ text: string; ok: boolean } | null>(null);
 
   useEffect(() => {
     api.getAppInfo(token).then(setAppInfo).catch(() => {});
-    api.getMcpConfig(token).then(setMcp).catch(() => {});
     api.listRepos(token).then(setRepos).catch(() => {});
+    api
+      .getBaseDir(token)
+      .then((dir) => {
+        setBaseDir(dir);
+        setBaseDirInput(dir);
+      })
+      .catch(() => {});
   }, [token]);
 
-  const mcpExample = mcp
-    ? JSON.stringify(
-        {
-          mcpServers: {
-            "git-repo-sync": {
-              command: mcp.exePath,
-              args: ["mcp"],
-              env: { GIT_REPO_SYNC_API_KEY: mcp.apiKey },
-            },
-          },
-        },
-        null,
-        2,
-      )
-    : "";
-
-  async function copyText(text: string, marker: string) {
+  async function handleSaveBaseDir() {
+    setBaseMsg(null);
     try {
-      await navigator.clipboard.writeText(text);
-      setCopied(marker);
-      setTimeout(() => setCopied(""), 1500);
-    } catch {
-      /* 剪贴板不可用 */
+      await api.setBaseDir(token, baseDirInput);
+      setBaseDir(baseDirInput.trim());
+      setBaseMsg({ text: "基地址已保存", ok: true });
+    } catch (err) {
+      setBaseMsg({ text: String(err), ok: false });
     }
   }
 
@@ -68,18 +59,45 @@ export function SettingsPage({ token, username }: { token: string; username: str
     }
   }
 
-  async function handleRegenerateKey() {
-    try {
-      const key = await api.regenerateMcpKey(token);
-      setMcp((c) => (c ? { ...c, apiKey: key } : c));
-    } catch {
-      /* 忽略 */
-    }
-  }
-
   return (
     <div className="mx-auto max-w-3xl space-y-4 p-6">
       <h1 className="text-lg font-semibold">设置</h1>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>仓库基地址</CardTitle>
+          <CardDescription>
+            同步时从源仓库拉取到基地址下的本地中转目录（按仓库名建目录），更新 LFS 与
+            submodule 后推送到目标仓库。支持 ~ 开头的路径。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex items-center gap-3">
+            <Input
+              className="max-w-sm font-mono text-xs"
+              value={baseDirInput}
+              onChange={(e) => setBaseDirInput(e.target.value)}
+              placeholder="~/repo"
+            />
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={handleSaveBaseDir}
+              disabled={!baseDirInput.trim() || baseDirInput === baseDir}
+            >
+              保存
+            </Button>
+            {baseMsg && (
+              <span className={`text-xs ${baseMsg.ok ? "text-success" : "text-destructive"}`}>
+                {baseMsg.text}
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            当前基地址：{baseDir || "…"}
+          </p>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
@@ -113,63 +131,6 @@ export function SettingsPage({ token, username }: { token: string; username: str
             {pwdMsg && (
               <span className={`text-xs ${pwdMsg.ok ? "text-success" : "text-destructive"}`}>{pwdMsg.text}</span>
             )}
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Agent（MCP 接入）</CardTitle>
-          <CardDescription>
-            Agent 通过 MCP stdio 方式连接本软件（APIKEY 鉴权），可管理仓库并触发同步
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="space-y-1.5">
-            <Label>API Key</Label>
-            <div className="flex items-center gap-2">
-              <code className="min-w-0 flex-1 truncate rounded-md border bg-muted/50 px-3 py-2 font-mono text-xs">
-                {mcp?.apiKey ?? "…"}
-              </code>
-              <Button
-                variant="outline"
-                size="icon"
-                title="复制"
-                onClick={() => mcp && copyText(mcp.apiKey, "key")}
-              >
-                <IconCopy />
-              </Button>
-              <Button variant="outline" size="icon" title="重新生成" onClick={handleRegenerateKey}>
-                <IconRefresh />
-              </Button>
-            </div>
-            {copied === "key" && <p className="text-xs text-success">已复制到剪贴板</p>}
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>MCP 客户端配置示例</Label>
-            <div className="relative">
-              <pre className="overflow-x-auto rounded-md border bg-muted/50 p-3 pr-12 font-mono text-xs leading-relaxed">
-                {mcpExample || "…"}
-              </pre>
-              <Button
-                variant="outline"
-                size="icon"
-                className="absolute right-2 top-2"
-                title="复制配置"
-                onClick={() => copyText(mcpExample, "config")}
-              >
-                <IconCopy />
-              </Button>
-            </div>
-            {copied === "config" && <p className="text-xs text-success">已复制到剪贴板</p>}
-            <p className="text-xs text-muted-foreground">
-              将以上配置加入 MCP 客户端后，Agent 以子进程方式运行本程序的 mcp 模式（stdio 通信）。
-            </p>
-          </div>
-
-          <div className="text-xs text-muted-foreground">
-            可用工具：list_repos、add_repo、remove_repo、sync_repo、get_sync_status
           </div>
         </CardContent>
       </Card>

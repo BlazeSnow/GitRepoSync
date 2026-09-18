@@ -64,7 +64,8 @@ pnpm tauri build        # 构建发布版安装包
 │   ├── lib/             # Tauri 命令封装（api.ts）、类型、工具函数
 │   └── main.tsx
 ├── src-tauri/           # Rust 后端
-│   ├── src/             # main / state / auth / repos / providers / settings / mcp
+│   ├── locales/         # Fluent 语言包（zh-CN / en-US）
+│   ├── src/             # main / state / lang / auth / repos / providers / settings / mcp
 │   ├── Cargo.toml
 │   └── tauri.conf.json
 ├── index.html

@@ -125,3 +125,17 @@ pub fn change_password(
     state.add_log(&tr(lang, "log-change-password"), &username);
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 升级 sha2 大版本后校验实现符合标准向量（参考值由 Node crypto 生成）
+    #[test]
+    fn hash_matches_reference() {
+        assert_eq!(
+            hash_password("00", "admin123"),
+            "8ebeceffd4c60f2e15bb5bda22116ab3b6cebdee20f39422be7ccfacddceada2"
+        );
+    }
+}

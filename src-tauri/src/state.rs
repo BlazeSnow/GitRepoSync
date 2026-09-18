@@ -1,7 +1,7 @@
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use uuid::Uuid;
 
@@ -10,40 +10,12 @@ pub fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
 }
 
-pub fn load_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
-    let data = fs::read_to_string(path).ok()?;
-    serde_json::from_str(&data).ok()
-}
-
-pub fn save_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    let s = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
-    fs::write(path, s).map_err(|e| e.to_string())
-}
-
 pub fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub struct User {
-    pub username: String,
-    pub salt: String,
-    pub password_hash: String,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Session {
-    pub token: String,
-    pub username: String,
-    pub expires_at: i64,
-}
-
-#[derive(Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
 pub struct Repo {
     pub id: String,
     pub name: String,
@@ -54,26 +26,14 @@ pub struct Repo {
     pub last_message: Option<String>,
 }
 
-#[derive(Clone, Serialize, Deserialize, Default)]
-pub struct Providers {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub github: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub gitlab: Option<String>,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct Settings {
-    pub mcp_api_key: String,
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            mcp_api_key: String::new(),
-        }
-    }
+/// 操作日志条目（软件全部操作入库 sqlite）
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OperationLog {
+    pub id: i64,
+    pub action: String,
+    pub operator: String,
+    pub created_at: i64,
 }
 
 /// 一次同步对应的 git 子进程句柄，供“停止同步”终止进程
@@ -82,82 +42,149 @@ pub struct SyncHandle {
 }
 
 pub struct AppState {
-    pub data_dir: PathBuf,
-    pub users: Mutex<Vec<User>>,
-    pub sessions: Mutex<Vec<Session>>,
-    pub repos: Mutex<Vec<Repo>>,
-    pub providers: Mutex<Providers>,
-    pub settings: Mutex<Settings>,
+    pub conn: Mutex<Connection>,
     pub sync_procs: Mutex<HashMap<String, Arc<SyncHandle>>>,
     pub syncing: Mutex<HashSet<String>>,
+    pub stop_requested: Mutex<HashSet<String>>,
 }
 
+pub const DEFAULT_BASE_DIR: &str = "~/repo";
+
 impl AppState {
-    pub fn init(data_dir: PathBuf) -> Result<Self, String> {
-        fs::create_dir_all(&data_dir).map_err(|e| format!("创建数据目录失败: {e}"))?;
+    /// 打开（或创建）sqlite 数据库并初始化表结构与默认数据
+    pub fn open(db_path: PathBuf) -> Result<Self, String> {
+        if let Some(parent) = db_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("创建数据目录失败: {e}"))?;
+        }
+        let conn = Connection::open(&db_path).map_err(|e| format!("打开数据库失败: {e}"))?;
+        conn.pragma_update(None, "journal_mode", "WAL")
+            .map_err(|e| format!("设置 WAL 失败: {e}"))?;
+        Self::ensure_schema(&conn);
 
-        // 首次启动时创建初始用户 admin / admin123
-        let users_path = data_dir.join("users.json");
-        let mut users: Vec<User> = load_json(&users_path).unwrap_or_default();
-        if users.is_empty() {
-            let salt = Uuid::new_v4().simple().to_string();
-            users.push(User {
-                username: "admin".into(),
-                salt: salt.clone(),
-                password_hash: crate::auth::hash_password(&salt, "admin123"),
-            });
-            save_json(&users_path, &users)?;
-        }
-
-        // 上次退出时残留的 running 状态复位为 idle
-        let repos_path = data_dir.join("repos.json");
-        let mut repos: Vec<Repo> = load_json(&repos_path).unwrap_or_default();
-        let mut dirty = false;
-        for r in repos.iter_mut() {
-            if r.last_status == "running" {
-                r.last_status = "idle".into();
-                dirty = true;
-            }
-        }
-        if dirty {
-            save_json(&repos_path, &repos)?;
-        }
-
-        let settings_path = data_dir.join("settings.json");
-        let mut settings: Settings = load_json(&settings_path).unwrap_or_default();
-        if settings.mcp_api_key.is_empty() {
-            settings.mcp_api_key = format!("grs_{}", Uuid::new_v4().simple());
-            save_json(&settings_path, &settings)?;
-        }
-        Ok(Self {
-            sessions: Mutex::new(load_json(&data_dir.join("sessions.json")).unwrap_or_default()),
-            repos: Mutex::new(repos),
-            providers: Mutex::new(load_json(&data_dir.join("providers.json")).unwrap_or_default()),
-            settings: Mutex::new(settings),
+        let state = Self {
+            conn: Mutex::new(conn),
             sync_procs: Mutex::new(HashMap::new()),
             syncing: Mutex::new(HashSet::new()),
-            users: Mutex::new(users),
-            data_dir,
-        })
+            stop_requested: Mutex::new(HashSet::new()),
+        };
+        state.seed();
+        Ok(state)
     }
 
-    pub fn users_path(&self) -> PathBuf {
-        self.data_dir.join("users.json")
+    fn ensure_schema(conn: &Connection) {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS users (
+                username      TEXT PRIMARY KEY,
+                salt          TEXT NOT NULL,
+                password_hash TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS sessions (
+                token      TEXT PRIMARY KEY,
+                username   TEXT NOT NULL,
+                expires_at INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS repos (
+                id           TEXT PRIMARY KEY,
+                name         TEXT NOT NULL,
+                source       TEXT NOT NULL,
+                target       TEXT NOT NULL,
+                last_synced  INTEGER,
+                last_status  TEXT NOT NULL DEFAULT 'idle',
+                last_message TEXT
+            );
+            CREATE TABLE IF NOT EXISTS providers (
+                platform TEXT PRIMARY KEY,
+                pat      TEXT
+            );
+            CREATE TABLE IF NOT EXISTS settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS operation_logs (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                action     TEXT NOT NULL,
+                operator   TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            );",
+        )
+        .expect("初始化数据库表失败");
     }
 
-    pub fn sessions_path(&self) -> PathBuf {
-        self.data_dir.join("sessions.json")
+    /// 首次启动初始化：admin/admin123 用户、默认基地址、MCP APIKEY
+    fn seed(&self) {
+        {
+            let conn = lock(&self.conn);
+            let count: i64 = conn
+                .query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))
+                .unwrap_or(0);
+            if count == 0 {
+                let salt = Uuid::new_v4().simple().to_string();
+                let _ = conn.execute(
+                    "INSERT INTO users (username, salt, password_hash) VALUES (?1, ?2, ?3)",
+                    rusqlite::params![
+                        "admin",
+                        salt,
+                        crate::auth::hash_password(&salt, "admin123")
+                    ],
+                );
+            }
+        }
+        if self.get_setting("base_dir").is_none() {
+            self.set_setting("base_dir", DEFAULT_BASE_DIR);
+        }
+        if self
+            .get_setting("mcp_api_key")
+            .is_none_or(|v| v.is_empty())
+        {
+            self.set_setting("mcp_api_key", &format!("grs_{}", Uuid::new_v4().simple()));
+        }
     }
 
-    pub fn repos_path(&self) -> PathBuf {
-        self.data_dir.join("repos.json")
+    pub fn get_setting(&self, key: &str) -> Option<String> {
+        let conn = lock(&self.conn);
+        conn.query_row(
+            "SELECT value FROM settings WHERE key = ?1",
+            rusqlite::params![key],
+            |r| r.get(0),
+        )
+        .ok()
     }
 
-    pub fn save_repos(&self) -> Result<(), String> {
-        save_json(&self.repos_path(), &*lock(&self.repos))
+    pub fn set_setting(&self, key: &str, value: &str) {
+        let conn = lock(&self.conn);
+        let _ = conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            rusqlite::params![key, value],
+        );
     }
 
-    pub fn save_settings(&self) -> Result<(), String> {
-        save_json(&self.data_dir.join("settings.json"), &*lock(&self.settings))
+    /// 记录操作日志（软件全部操作入库）
+    pub fn add_log(&self, action: &str, operator: &str) {
+        let conn = lock(&self.conn);
+        let _ = conn.execute(
+            "INSERT INTO operation_logs (action, operator, created_at) VALUES (?1, ?2, ?3)",
+            rusqlite::params![action, operator, now_ms()],
+        );
+    }
+
+    /// 将残留的 running 状态复位为 idle（仅应用启动时调用）
+    pub fn reset_running_repos(&self) {
+        let conn = lock(&self.conn);
+        let _ = conn.execute(
+            "UPDATE repos SET last_status = 'idle' WHERE last_status = 'running'",
+            [],
+        );
+    }
+
+    /// 等待所有在途同步结束（MCP 会话断开后保持进程存活，避免杀死同步）
+    pub fn wait_syncs_idle(&self) {
+        loop {
+            if lock(&self.syncing).is_empty() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
     }
 }

@@ -1,5 +1,6 @@
 use crate::auth::require_session;
-use crate::state::{lock, save_json, AppState};
+use crate::state::{lock, AppState};
+use rusqlite::params;
 use serde::Serialize;
 use std::sync::Arc;
 use tauri::State;
@@ -44,25 +45,38 @@ fn mask(pat: &str) -> String {
     }
 }
 
+fn get_pat(state: &AppState, platform: &str) -> Option<String> {
+    let conn = lock(&state.conn);
+    conn.query_row(
+        "SELECT pat FROM providers WHERE platform = ?1",
+        params![platform],
+        |r| r.get::<_, Option<String>>(0),
+    )
+    .ok()
+    .flatten()
+}
+
 #[tauri::command]
 pub fn get_providers(
     state: State<'_, Arc<AppState>>,
     token: String,
 ) -> Result<Vec<ProviderInfo>, String> {
     require_session(&state, &token)?;
-    let p = lock(&state.providers);
-    Ok(vec![
-        ProviderInfo {
-            platform: "github".into(),
-            has_pat: p.github.is_some(),
-            pat_masked: p.github.as_ref().map(|s| mask(s)),
-        },
-        ProviderInfo {
-            platform: "gitlab".into(),
-            has_pat: p.gitlab.is_some(),
-            pat_masked: p.gitlab.as_ref().map(|s| mask(s)),
-        },
-    ])
+    Ok(["github", "gitlab"]
+        .iter()
+        .map(|p| match get_pat(&state, p) {
+            Some(pat) => ProviderInfo {
+                platform: p.to_string(),
+                has_pat: true,
+                pat_masked: Some(mask(&pat)),
+            },
+            None => ProviderInfo {
+                platform: p.to_string(),
+                has_pat: false,
+                pat_masked: None,
+            },
+        })
+        .collect())
 }
 
 #[tauri::command]
@@ -72,18 +86,29 @@ pub fn save_provider(
     platform: String,
     pat: Option<String>,
 ) -> Result<(), String> {
-    require_session(&state, &token)?;
+    let username = require_session(&state, &token)?;
     let pat = pat.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-    {
-        let mut p = lock(&state.providers);
-        match platform.as_str() {
-            "github" => p.github = pat,
-            "gitlab" => p.gitlab = pat,
-            _ => return Err("不支持的平台".into()),
-        }
+    match platform.as_str() {
+        "github" | "gitlab" => {}
+        _ => return Err("不支持的平台".into()),
     }
-    let path = state.data_dir.join("providers.json");
-    save_json(&path, &*lock(&state.providers))
+    {
+        let conn = lock(&state.conn);
+        conn.execute(
+            "INSERT INTO providers (platform, pat) VALUES (?1, ?2)
+             ON CONFLICT(platform) DO UPDATE SET pat = excluded.pat",
+            params![platform, pat],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    state.add_log(
+        &match &pat {
+            Some(_) => format!("保存 {platform} PAT"),
+            None => format!("清除 {platform} PAT"),
+        },
+        &username,
+    );
+    Ok(())
 }
 
 #[tauri::command]
@@ -93,15 +118,7 @@ pub async fn fetch_provider_accounts(
     platform: String,
 ) -> Result<AccountInfo, String> {
     require_session(&state, &token)?;
-    let pat = {
-        let p = lock(&state.providers);
-        match platform.as_str() {
-            "github" => p.github.clone(),
-            "gitlab" => p.gitlab.clone(),
-            _ => return Err("不支持的平台".into()),
-        }
-    }
-    .ok_or("请先保存该平台的 PAT")?;
+    let pat = get_pat(&state, &platform).ok_or("请先保存该平台的 PAT")?;
 
     match platform.as_str() {
         "github" => fetch_github(&platform, &pat).await,

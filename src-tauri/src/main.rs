@@ -26,7 +26,8 @@ fn main() {
                 .path()
                 .app_data_dir()
                 .map_err(|e| format!("解析数据目录失败: {e}"))?;
-            let state = Arc::new(AppState::init(data_dir)?);
+            let state = Arc::new(AppState::open(data_dir.join("app.db"))?);
+            state.reset_running_repos();
             app.manage(state);
             Ok(())
         })
@@ -44,8 +45,11 @@ fn main() {
             providers::save_provider,
             providers::fetch_provider_accounts,
             settings::get_app_info,
+            settings::get_base_dir,
+            settings::set_base_dir,
             settings::get_mcp_config,
             settings::regenerate_mcp_api_key,
+            settings::list_operation_logs,
         ])
         .run(tauri::generate_context!())
         .expect("Git Repo Sync 启动失败");
@@ -69,6 +73,8 @@ fn run_mcp_stdio(args: &[String]) {
     let data_dir = dirs::data_dir()
         .expect("无法定位系统数据目录")
         .join("com.blazesnow.gitreposync");
-    let state = Arc::new(AppState::init(data_dir).expect("初始化数据目录失败"));
-    mcp::run_stdio(state, provided);
+    let state = Arc::new(AppState::open(data_dir.join("app.db")).expect("初始化数据库失败"));
+    mcp::run_stdio(state.clone(), provided);
+    // stdin 已关闭（客户端断开）：等待在途同步完成后再退出，避免中断同步
+    state.wait_syncs_idle();
 }

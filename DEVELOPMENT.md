@@ -35,23 +35,29 @@ pnpm tauri build        # 构建发布版安装包
 
 环境搭建与更多命令见 [references/environment.md](./references/environment.md)。
 
-## 5. 项目结构（规划）
+## 5. 项目结构
 
 ```
-├── .gitignore           # Git 忽略规则（依赖、构建产物、密钥等）
-├── .gitattributes       # Git 属性（统一 LF 换行符、二进制文件标记）
+├── .github/workflows/release.yml  # GitHub Actions 发布工作流
 ├── AGENTS.md            # 开发/Agent 约定（禁止修改）
 ├── CHANGELOG.md         # 变更记录（每完成一项功能后更新）
 ├── DEVELOPMENT.md       # 开发文档主入口
 ├── references/          # 开发文档详细内容
 │   ├── environment.md   # 环境准备与常用命令
-│   ├── features.md      # 功能设计
+│   ├── features.md      # 功能设计与实现说明
 │   └── release.md       # 构建与发布
-├── src/                 # 前端代码（shadcn/ui）
-└── src-tauri/           # Rust 后端
-    ├── src/
-    ├── Cargo.toml
-    └── tauri.conf.json
+├── src/                 # 前端代码（React + TypeScript）
+│   ├── components/      # 页面组件与 shadcn/ui 风格基础组件（ui/）
+│   ├── lib/             # Tauri 命令封装（api.ts）、类型、工具函数
+│   └── main.tsx
+├── src-tauri/           # Rust 后端
+│   ├── src/             # main / state / auth / repos / providers / settings / mcp
+│   ├── Cargo.toml
+│   └── tauri.conf.json
+├── index.html
+├── package.json
+├── vite.config.ts
+└── tailwind.config.js
 ```
 
 ## 6. 开发约定

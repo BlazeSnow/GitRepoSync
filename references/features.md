@@ -98,7 +98,7 @@
 ## 9. 多语言（中文 / English）
 
 - 后端采用 [fluent-i18n](https://crates.io/crates/fluent-i18n)，全部文案集中在 `src-tauri/locales/zh-CN/main.ftl`（默认与回落语言）与 `en-US/main.ftl`，编译期内嵌
-- 前端为轻量词典式 i18n（`src/i18n.tsx`），登录页与侧边栏均可切换语言，选择存入 localStorage，首次启动按系统语言自动选择
+- 前端采用 [react-i18next](https://react.i18next.dev/)（词典内嵌 `src/i18n.ts`），登录页与侧边栏均可切换语言，选择存入 localStorage，首次启动按浏览器语言自动选择
 - 语言选择规则：
   - GUI：前端切换语言时通过 `set_lang` 命令同步到后端，之后的错误提示、日志、同步结果按该语言记录
   - MCP：按 initialize 请求的 `locale` 字段返回工具描述与运行时消息；环境变量 `GIT_REPO_SYNC_LANG`（`zh` / `en`）可强制指定

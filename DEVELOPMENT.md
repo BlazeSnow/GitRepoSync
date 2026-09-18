@@ -14,7 +14,7 @@ Git Repo Sync 是一款跨平台的 Git 仓库同步桌面软件，用于将仓�
 | --- | --- |
 | 桌面框架 | Tauri 2 |
 | 后端 | Rust |
-| 前端 UI | shadcn/ui（React + TypeScript + Tailwind CSS） |
+| 前端 UI | shadcn/ui（React + TypeScript + Tailwind CSS），i18n 采用 react-i18next |
 | 数据库 | SQLite（rusqlite bundled，WAL 模式） |
 | 打包发布 | GitHub Actions → GitHub Releases（支持 beta 版本） |
 

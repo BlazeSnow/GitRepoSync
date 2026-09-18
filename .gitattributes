@@ -6,14 +6,17 @@
 *.cmd text eol=crlf
 *.ps1 text eol=crlf
 
-# 二进制文件（禁止换行符转换与 diff）
-*.png binary
-*.jpg binary
-*.jpeg binary
-*.gif binary
-*.webp binary
-*.ico binary
-*.icns binary
+# 图片文件统一由 Git LFS 管理
+*.png filter=lfs diff=lfs merge=lfs -text
+*.jpg filter=lfs diff=lfs merge=lfs -text
+*.jpeg filter=lfs diff=lfs merge=lfs -text
+*.gif filter=lfs diff=lfs merge=lfs -text
+*.webp filter=lfs diff=lfs merge=lfs -text
+*.bmp filter=lfs diff=lfs merge=lfs -text
+*.ico filter=lfs diff=lfs merge=lfs -text
+*.icns filter=lfs diff=lfs merge=lfs -text
+
+# 其他二进制文件（禁止换行符转换与 diff）
 *.pdf binary
 *.woff binary
 *.woff2 binary

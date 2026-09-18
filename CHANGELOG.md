@@ -14,7 +14,7 @@
 - 🔌 MCP 页面：展示 MCP 连接配置（API Key、可一键复制的客户端配置示例）与全部可用工具说明，帮助用户理解与配置接入
 - 🤖 Agent（MCP 接入）：软件采用 MCP stdio 连接方式——Agent 以子进程运行 `git-repo-sync.exe mcp`（换行分隔 JSON-RPC 2.0），通过 APIKEY 鉴权（环境变量 `GIT_REPO_SYNC_API_KEY` 或 `--api-key` 参数）；提供 `list_repos`、`add_repo`、`remove_repo`、`sync_repo`、`get_sync_status`、`get_base_dir`、`set_base_dir` 七个工具；客户端断开后进程等待在途同步完成再退出，不中断同步
 - 🌍 多语言支持（简体中文 / English）：后端采用 fluent-i18n，全部文案集中在 Fluent 语言包（`locales/*.ftl`），缺失翻译自动回落中文；前端采用 react-i18next，登录页与侧边栏可切换语言（浏览器语言探测 + localStorage 记忆）；MCP 工具描述、参数描述与运行时消息按 Agent 客户端 initialize 的 `locale` 返回，可用环境变量 `GIT_REPO_SYNC_LANG`（`zh` / `en`）强制指定；工具名称为协议契约不随语言变化
-- ⚙️ 设置页面：修改本地仓库基地址、修改账户密码、列出本软件管理的仓库、展示软件版本号与运行系统
+- ⚙️ 设置页面：修改本地仓库基地址、修改账户密码、展示软件版本号与本软件源码仓库
 - 🏷️ 版本与发布体系：版本号统一维护在 package.json（`version` / `msiVersion` / `baseVersion`），`version.ps1` 一键同步到 tauri.conf.json、Cargo.toml 与 Cargo.lock；`tag.ps1` 一致性检查后打 tag 触发发布；CI 在 PR 与发布时双重校验版本一致性
 
 ### 🚀 改进

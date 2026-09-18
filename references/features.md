@@ -94,8 +94,8 @@
 
 - 修改本地仓库基地址（同步中转目录的父目录，默认 `~/repo`，支持 `~` 开头路径）
 - 修改账户密码
-- 列出本软件管理的仓库（只读列表，编辑入口在“同步仓库”页面）
-- 列出本软件版本号、名称与运行系统
+- 列出本软件版本号
+- 列出本软件源码仓库：[github.com/BlazeSnow/GitRepoSync](https://github.com/BlazeSnow/GitRepoSync)
 
 ## 9. 多语言（中文 / English）
 

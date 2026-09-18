@@ -1,18 +1,19 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
-import type { AppInfo, Repo } from "@/lib/types";
+import type { AppInfo } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useTranslation } from "react-i18next";
+
+/** 本软件的源码仓库 */
+const SOURCE_REPO_URL = "https://github.com/BlazeSnow/GitRepoSync";
 
 export function SettingsPage({ token, username }: { token: string; username: string }) {
   const { t } = useTranslation();
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
-  const [repos, setRepos] = useState<Repo[]>([]);
   const [baseDir, setBaseDir] = useState("");
   const [baseDirInput, setBaseDirInput] = useState("");
   const [oldPwd, setOldPwd] = useState("");
@@ -23,7 +24,6 @@ export function SettingsPage({ token, username }: { token: string; username: str
 
   useEffect(() => {
     api.getAppInfo(token).then(setAppInfo).catch(() => {});
-    api.listRepos(token).then(setRepos).catch(() => {});
     api
       .getBaseDir(token)
       .then((dir) => {
@@ -92,7 +92,9 @@ export function SettingsPage({ token, username }: { token: string; username: str
               </span>
             )}
           </div>
-          <p className="text-xs text-muted-foreground">{t("currentBaseDir", { dir: baseDir || "…" })}</p>
+          <p className="text-xs text-muted-foreground">
+            {t("currentBaseDir", { dir: baseDir || "…" })}
+          </p>
         </CardContent>
       </Card>
 
@@ -149,57 +151,21 @@ export function SettingsPage({ token, username }: { token: string; username: str
           <CardTitle>{t("softwareInfo")}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-1 text-sm">
-          <div className="flex gap-2">
-            <span className="w-32 text-muted-foreground">{t("appName")}</span>
-            <span>{appInfo?.name ?? "Git Repo Sync"}</span>
-          </div>
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2">
             <span className="w-32 text-muted-foreground">{t("versionLabel")}</span>
             <Badge variant="secondary">v{appInfo?.version ?? "…"}</Badge>
           </div>
-          <div className="flex gap-2">
-            <span className="w-32 text-muted-foreground">{t("osLabel")}</span>
-            <span>{appInfo?.os ?? "…"}</span>
+          <div className="flex items-center gap-2">
+            <span className="w-32 shrink-0 text-muted-foreground">{t("repoLinkLabel")}</span>
+            <a
+              href={SOURCE_REPO_URL}
+              target="_blank"
+              rel="noreferrer"
+              className="truncate font-mono text-xs text-primary underline-offset-2 hover:underline"
+            >
+              {SOURCE_REPO_URL}
+            </a>
           </div>
-          <div className="flex gap-2">
-            <span className="w-32 text-muted-foreground">{t("repoCountLabel")}</span>
-            <span>{repos.length}</span>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>{t("repoListTitle")}</CardTitle>
-          <CardDescription>{t("repoListDesc")}</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {repos.length === 0 ? (
-            <p className="text-sm text-muted-foreground">{t("listEmpty")}</p>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow className="hover:bg-transparent">
-                  <TableHead>{t("colRepo")}</TableHead>
-                  <TableHead>{t("colSource")}</TableHead>
-                  <TableHead>{t("colTarget")}</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {repos.map((r) => (
-                  <TableRow key={r.id}>
-                    <TableCell className="font-medium">{r.name}</TableCell>
-                    <TableCell className="max-w-0 truncate text-muted-foreground" title={r.source}>
-                      {r.source}
-                    </TableCell>
-                    <TableCell className="max-w-0 truncate text-muted-foreground" title={r.target}>
-                      {r.target}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
         </CardContent>
       </Card>
     </div>

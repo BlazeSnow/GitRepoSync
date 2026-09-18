@@ -122,13 +122,8 @@ const zh = {
   pwdMismatch: "两次输入的新密码不一致",
   pwdChanged: "密码修改成功",
   softwareInfo: "软件信息",
-  appName: "软件名称",
   versionLabel: "版本号",
-  osLabel: "操作系统",
-  repoCountLabel: "本软件仓库",
-  repoListTitle: "仓库列表",
-  repoListDesc: "本软件管理的全部同步仓库（只读，可在“同步仓库”页面编辑）",
-  listEmpty: "暂无仓库",
+  repoLinkLabel: "本软件仓库",
   restoring: "正在恢复登录…",
 };
 
@@ -249,14 +244,8 @@ const en = {
   pwdMismatch: "The two new passwords do not match",
   pwdChanged: "Password changed",
   softwareInfo: "App info",
-  appName: "App name",
   versionLabel: "Version",
-  osLabel: "Operating system",
-  repoCountLabel: "Managed repositories",
-  repoListTitle: "Repository list",
-  repoListDesc:
-    "All repositories managed by this app (read-only; edit them on the Repositories page)",
-  listEmpty: "No repositories",
+  repoLinkLabel: "Source repository",
   restoring: "Restoring session…",
 };
 

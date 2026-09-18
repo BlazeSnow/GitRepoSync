@@ -4,16 +4,17 @@
 
 .DESCRIPTION
   默认启动 Debug 版桌面应用：若未构建过或源码晚于上次构建，则先执行增量构建
-  （pnpm tauri build --debug --no-bundle），再直接运行可执行文件。
+  （pnpm tauri build --debug --no-bundle），再后台启动可执行文件——脚本立即返回，
+  不阻塞终端，应用独立运行。
   可选参数切换模式：
-  -Dev      开发模式：pnpm tauri dev（前端热重载 + Rust 增量编译）。
+  -Dev      开发模式：pnpm tauri dev（前端热重载 + Rust 增量编译，占用终端）。
   -Build    打包当前平台发布版安装包（pnpm tauri build）。
   -Rebuild  强制重新构建 Debug 版后再启动。
   首次运行会自动执行 pnpm install 安装前端依赖，可使用 -SkipInstall 跳过。
   脚本开头会将终端切换为 UTF-8 编码（chcp 65001），避免 GBK 终端下中文乱码。
 
 .PARAMETER Dev
-  以开发模式启动（pnpm tauri dev，热重载）。
+  以开发模式启动（pnpm tauri dev，热重载，占用终端直到退出）。
 
 .PARAMETER Build
   打包发布版安装包。
@@ -25,7 +26,7 @@
   跳过依赖安装（pnpm install）。
 
 .EXAMPLE
-  .\run.ps1            # 快速启动 Debug 版（源码有改动时自动增量重建）
+  .\run.ps1            # 构建并后台启动 Debug 版（源码有改动时自动增量重建）
   .\run.ps1 -Dev       # 开发模式（热重载）
   .\run.ps1 -Build     # 打包发布版
   .\run.ps1 -Rebuild   # 强制重建 Debug 版并启动
@@ -103,9 +104,9 @@ try {
             pnpm tauri build --debug --no-bundle
             if ($LASTEXITCODE -ne 0) { throw 'Debug 构建失败' }
         }
-        Write-Host "启动 $exe"
-        & $exe @args
-        if ($LASTEXITCODE -ne 0) { throw '运行失败' }
+        # 后台启动应用：脚本立即返回，不阻塞终端
+        Start-Process -FilePath $exe -WorkingDirectory $RepoRoot | Out-Null
+        Write-Host "已在后台启动 $exe"
     }
 }
 finally {

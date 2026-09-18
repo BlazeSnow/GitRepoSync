@@ -29,8 +29,8 @@ Git Repo Sync 是一款跨平台的 Git 仓库同步桌面软件，用于将仓�
 ## 4. 快速开始
 
 ```powershell
-.\run.ps1               # 快速启动 Debug 版（源码有改动时自动增量重建）
-.\run.ps1 -Dev          # 开发模式（前端热重载 + Rust 增量编译）
+.\run.ps1               # 构建并后台启动 Debug 版（源码有改动时自动增量重建，脚本立即返回）
+.\run.ps1 -Dev          # 开发模式（前端热重载 + Rust 增量编译，占用终端）
 .\run.ps1 -Build        # 打包发布版安装包
 ```
 

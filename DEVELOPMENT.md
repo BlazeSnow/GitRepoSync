@@ -38,6 +38,8 @@ pnpm tauri build        # 构建发布版安装包
 ## 5. 项目结构（规划）
 
 ```
+├── .gitignore           # Git 忽略规则（依赖、构建产物、密钥等）
+├── .gitattributes       # Git 属性（统一 LF 换行符、二进制文件标记）
 ├── AGENTS.md            # 开发/Agent 约定（禁止修改）
 ├── CHANGELOG.md         # 变更记录（每完成一项功能后更新）
 ├── DEVELOPMENT.md       # 开发文档主入口

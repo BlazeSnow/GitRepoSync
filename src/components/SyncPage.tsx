@@ -47,7 +47,8 @@ export function SyncPage({ token }: { token: string }) {
 
   const load = useCallback(async () => {
     try {
-      setRepos(await api.listRepos(token));
+      // 自动发现基地址内仓库（origin → 源地址，backup → 目标地址）后返回全量列表
+      setRepos(await api.discoverRepos(token));
       setError("");
     } catch (err) {
       setError(String(err));
@@ -239,15 +240,15 @@ export function SyncPage({ token }: { token: string }) {
                     <TableCell className="font-medium">{repo.name}</TableCell>
                     <TableCell
                       className="max-w-0 truncate text-muted-foreground"
-                      title={repo.source}
+                      title={repo.source || undefined}
                     >
-                      {repo.source}
+                      {repo.source || t("notConfigured")}
                     </TableCell>
                     <TableCell
                       className="max-w-0 truncate text-muted-foreground"
-                      title={repo.target}
+                      title={repo.target || undefined}
                     >
-                      {repo.target}
+                      {repo.target || t("notConfigured")}
                     </TableCell>
                     <TableCell>
                       <Badge

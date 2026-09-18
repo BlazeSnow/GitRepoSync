@@ -130,7 +130,8 @@ impl AppState {
                 target       TEXT NOT NULL,
                 last_synced  INTEGER,
                 last_status  TEXT NOT NULL DEFAULT 'idle',
-                last_message TEXT
+                last_message TEXT,
+                hidden       INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS settings (
                 key   TEXT PRIMARY KEY,
@@ -144,6 +145,8 @@ impl AppState {
             );",
         )
         .expect("初始化数据库表失败");
+        // 旧库升级：repos 表补 hidden 列（已存在时忽略错误）
+        let _ = conn.execute("ALTER TABLE repos ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0", []);
     }
 
     /// 首次启动初始化：admin/admin123 用户、默认基地址、MCP APIKEY

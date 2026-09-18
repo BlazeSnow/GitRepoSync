@@ -38,6 +38,9 @@ step-push = Pushed to target repository
 lfs-skipped = git-lfs not detected; skipped LFS update
 manually-stopped = Manually stopped
 git-spawn-error = Failed to launch git: {$err} (make sure Git is installed and on PATH)
+sync-unconfigured = Source or target URL is not configured
+log-repo-discovered = Discovered and registered repository "{$name}"
+
 git-timeout = git command timed out ({$secs} s)
 warn-submodule = ⚠ submodule update failed, skipped: {$err}
 warn-lfs-fetch = ⚠ LFS fetch failed, only pointer files backed up: {$err}

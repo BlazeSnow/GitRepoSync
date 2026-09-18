@@ -50,7 +50,9 @@ pub fn list_repos(state: State<'_, Arc<AppState>>, token: String) -> Result<Vec<
     require_session(&state, &token)?;
     let conn = lock(&state.conn);
     let mut stmt = conn
-        .prepare(&format!("SELECT {REPO_COLS} FROM repos ORDER BY name"))
+        .prepare(&format!(
+            "SELECT {REPO_COLS} FROM repos WHERE hidden = 0 ORDER BY name"
+        ))
         .map_err(|e| e.to_string())?;
     let repos = stmt
         .query_map([], repo_from_row)
@@ -155,7 +157,8 @@ pub fn delete_repo(
                 r.get::<_, String>(0)
             })
             .map_err(|_| tr(lang, "repo-not-found"))?;
-        conn.execute("DELETE FROM repos WHERE id = ?1", params![id])
+        // 标记隐藏而非物理删除：目录仍在基地址内时避免被自动发现反复登记
+        conn.execute("UPDATE repos SET hidden = 1 WHERE id = ?1", params![id])
             .map_err(|e| e.to_string())?;
         name
     };
@@ -240,6 +243,125 @@ pub fn stop_sync(
         state.add_log(&tr(gui_lang(), "log-sync-stopped-cmd"), &username);
     }
     Ok(())
+}
+
+/// 读取本地仓库指定远端的 URL；远端不存在返回 None
+fn git_remote_url(dir: &Path, name: &str) -> Option<String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["remote", "get-url", name])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    if out.status.success() {
+        let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        (!s.is_empty()).then_some(s)
+    } else {
+        None
+    }
+}
+
+/// 扫描基地址下的一级子目录，自动登记未入库的 git 仓库：
+/// origin 远端作为源地址、backup 远端作为目标地址，缺失以空串存储（界面显示“未配置”）；
+/// 已登记的仓库仅补填空地址，不覆盖用户手动修改的值；隐藏（已删除）的仓库跳过。
+pub fn discover(state: &AppState, operator: &str, lang: Lang) -> Result<(), String> {
+    let base_dir = state
+        .get_setting("base_dir")
+        .unwrap_or_else(crate::state::default_base_dir);
+    let base = PathBuf::from(&base_dir);
+
+    let mut found: Vec<(String, Option<String>, Option<String>)> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&base) {
+        for e in entries.flatten() {
+            let path = e.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if name.starts_with('.') || !path.join(".git").exists() {
+                continue;
+            }
+            let origin = git_remote_url(&path, "origin");
+            let backup = git_remote_url(&path, "backup");
+            found.push((name.to_string(), origin, backup));
+        }
+    }
+    found.sort();
+
+    let mut to_register: Vec<(String, String, String)> = Vec::new();
+    let mut to_patch: Vec<(String, String, String)> = Vec::new();
+    {
+        let conn = lock(&state.conn);
+        for (name, origin, backup) in found {
+            let hidden: i64 = conn
+                .query_row(
+                    "SELECT hidden FROM repos WHERE name = ?1",
+                    params![name],
+                    |r| r.get(0),
+                )
+                .unwrap_or(2); // 2 = 无记录
+            match hidden {
+                1 => continue, // 用户已删除，跳过
+                0 => {
+                    if let Some(o) = &origin {
+                        to_patch.push((name.clone(), "source".into(), o.clone()));
+                    }
+                    if let Some(b) = &backup {
+                        to_patch.push((name.clone(), "target".into(), b.clone()));
+                    }
+                }
+                _ => {
+                    to_register.push((
+                        name,
+                        origin.unwrap_or_default(),
+                        backup.unwrap_or_default(),
+                    ));
+                }
+            }
+        }
+        for (name, col, url) in &to_patch {
+            let _ = conn.execute(
+                &format!("UPDATE repos SET {col} = ?1 WHERE name = ?2 AND {col} = ''"),
+                params![url, name],
+            );
+        }
+        for (name, source, target) in &to_register {
+            conn.execute(
+                "INSERT INTO repos (id, name, source, target, last_synced, last_status, last_message, hidden)
+                 VALUES (?1, ?2, ?3, ?4, NULL, 'idle', NULL, 0)",
+                params![Uuid::new_v4().to_string(), name, source, target],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+    }
+    for (name, _, _) in &to_register {
+        state.add_log(&tr_a(lang, "log-repo-discovered", &[("name", name)]), operator);
+    }
+    Ok(())
+}
+
+/// 主界面加载入口：先自动发现基地址内仓库，再返回最新列表
+#[tauri::command]
+pub fn discover_repos(state: State<'_, Arc<AppState>>, token: String) -> Result<Vec<Repo>, String> {
+    let username = require_session(&state, &token)?;
+    let lang = gui_lang();
+    discover(&state, &username, lang)?;
+    let conn = lock(&state.conn);
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {REPO_COLS} FROM repos WHERE hidden = 0 ORDER BY name"
+        ))
+        .map_err(|e| e.to_string())?;
+    let repos = stmt
+        .query_map([], repo_from_row)
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    Ok(repos)
 }
 
 /// 入队一个同步任务；队列由单一 worker 串行消费，返回 false 表示该仓库已在队列或同步中
@@ -374,6 +496,30 @@ fn run_sync(
             last_synced: repo.last_synced,
         },
     );
+
+    if repo.source.is_empty() || repo.target.is_empty() {
+        let msg = tr(lang, "sync-unconfigured");
+        finish(
+            state,
+            &repo.name,
+            repo_id,
+            "failed",
+            Some(msg.clone()),
+            false,
+            operator,
+            lang,
+        );
+        emit_status(
+            app,
+            SyncEvent {
+                id: repo_id.to_string(),
+                status: "failed".into(),
+                message: Some(msg),
+                last_synced: repo.last_synced,
+            },
+        );
+        return;
+    }
 
     state.add_log(
         &tr_a(lang, "log-sync-started", &[("name", &repo.name)]),
@@ -697,6 +843,82 @@ mod tests {
         let args = git_args(&["fetch", "origin"]);
         assert_eq!(args[0], "-c");
         assert!(args.iter().any(|a| a == "fetch"));
+    }
+
+    #[test]
+    fn discover_registers_and_patches() {
+        use crate::state::AppState;
+
+        let root = std::env::temp_dir().join(format!("grs-test-{}", uuid::Uuid::new_v4().simple()));
+        let base = root.join("base");
+        std::fs::create_dir_all(&base).unwrap();
+        let git = |args: &[&str], cwd: &Path| {
+            let st = std::process::Command::new("git")
+                .args(args)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .current_dir(cwd)
+                .status()
+                .unwrap();
+            assert!(st.success(), "git {:?} failed", args);
+        };
+
+        // alpha：origin + backup 都配置
+        let alpha = base.join("alpha");
+        std::fs::create_dir_all(&alpha).unwrap();
+        git(&["init", "-q"], &alpha);
+        git(&["remote", "add", "origin", "https://github.com/u/alpha.git"], &alpha);
+        git(&["remote", "add", "backup", "https://gitlab.com/u/alpha.git"], &alpha);
+        // beta：仅 origin
+        let beta = base.join("beta");
+        std::fs::create_dir_all(&beta).unwrap();
+        git(&["init", "-q"], &beta);
+        git(&["remote", "add", "origin", "https://github.com/u/beta.git"], &beta);
+        // 非 git 目录与隐藏目录应被跳过
+        std::fs::create_dir_all(base.join("notrepo")).unwrap();
+        std::fs::create_dir_all(base.join(".hid")).unwrap();
+
+        let state = AppState::open(root.join("app.db")).unwrap();
+        state.set_setting("base_dir", &base.to_string_lossy());
+        discover(&state, "test", crate::lang::Lang::Zh).unwrap();
+
+        let list = || -> Vec<(String, String, String)> {
+            let conn = lock(&state.conn);
+            let mut stmt = conn
+                .prepare("SELECT name, source, target FROM repos WHERE hidden = 0 ORDER BY name")
+                .unwrap();
+            stmt.query_map([], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+            })
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+        };
+        let rows = list();
+        assert_eq!(rows.len(), 2, "only git repos registered: {rows:?}");
+        assert_eq!(rows[0], ("alpha".into(), "https://github.com/u/alpha.git".into(), "https://gitlab.com/u/alpha.git".into()));
+        assert_eq!(rows[1], ("beta".into(), "https://github.com/u/beta.git".into(), String::new()));
+
+        // 幂等：再次发现不产生重复
+        discover(&state, "test", crate::lang::Lang::Zh).unwrap();
+        assert_eq!(list().len(), 2);
+
+        // 补空值：beta 后来加了 backup 远端，再次发现应自动补上
+        git(&["remote", "add", "backup", "https://gitlab.com/u/beta.git"], &beta);
+        discover(&state, "test", crate::lang::Lang::Zh).unwrap();
+        let rows = list();
+        assert_eq!(rows[1].2, "https://gitlab.com/u/beta.git");
+
+        // 隐藏的仓库不再被登记：隐藏 alpha 后其目录仍在基地址内
+        {
+            let conn = lock(&state.conn);
+            conn.execute("UPDATE repos SET hidden = 1 WHERE name = 'alpha'", []).unwrap();
+        }
+        discover(&state, "test", crate::lang::Lang::Zh).unwrap();
+        let rows = list();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, "beta");
+
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

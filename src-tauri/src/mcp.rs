@@ -194,7 +194,9 @@ const REPO_COLS: &str = "id, name, source, target, last_synced, last_status, las
 fn list_repos_value(state: &AppState) -> Result<Value, String> {
     let conn = lock(&state.conn);
     let mut stmt = conn
-        .prepare(&format!("SELECT {REPO_COLS} FROM repos ORDER BY name"))
+        .prepare(&format!(
+            "SELECT {REPO_COLS} FROM repos WHERE hidden = 0 ORDER BY name"
+        ))
         .map_err(|e| e.to_string())?;
     let repos = stmt
         .query_map([], repo_from_row)
@@ -265,7 +267,7 @@ fn tools_call(state: &Arc<AppState>, lang: Lang, params: &Value) -> Result<Value
             }
             let deleted = {
                 let conn = lock(&state.conn);
-                conn.execute("DELETE FROM repos WHERE id = ?1", params![id])
+                conn.execute("UPDATE repos SET hidden = 1 WHERE id = ?1", params![id])
                     .map_err(|e| (-32602, e.to_string()))?
             };
             if deleted == 0 {

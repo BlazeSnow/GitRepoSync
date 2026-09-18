@@ -17,6 +17,9 @@ export const api = {
   listRepos(token: string) {
     return invoke<Repo[]>("list_repos", { token });
   },
+  discoverRepos(token: string) {
+    return invoke<Repo[]>("discover_repos", { token });
+  },
   saveRepo(
     token: string,
     args: { id?: string | null; name: string; source: string; target: string },

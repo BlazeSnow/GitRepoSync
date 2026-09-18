@@ -42,6 +42,7 @@ fn main() {
             auth::logout,
             auth::change_password,
             repos::list_repos,
+            repos::discover_repos,
             repos::save_repo,
             repos::delete_repo,
             repos::start_sync,

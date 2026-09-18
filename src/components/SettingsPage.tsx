@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { useTranslation } from "react-i18next";
 import { changeAppLang } from "@/i18n";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { open } from "@tauri-apps/plugin-dialog";
 
 /** 本软件的源码仓库 */
 const SOURCE_REPO_URL = "https://github.com/BlazeSnow/GitRepoSync";
@@ -35,6 +36,17 @@ export function SettingsPage({ token, username }: { token: string; username: str
       })
       .catch(() => {});
   }, [token]);
+
+  async function browseBaseDir() {
+    try {
+      const dir = await open({ directory: true, multiple: false });
+      if (typeof dir === "string" && dir) {
+        setBaseDirInput(dir);
+      }
+    } catch {
+      /* 用户取消或对话框不可用 */
+    }
+  }
 
   async function handleSaveBaseDir() {
     setBaseMsg(null);
@@ -70,6 +82,23 @@ export function SettingsPage({ token, username }: { token: string; username: str
 
       <Card>
         <CardHeader>
+          <CardTitle>语言 / Language</CardTitle>
+          <CardDescription>{t("langDesc")}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex gap-2">
+            <Button variant={isZh ? "default" : "outline"} onClick={() => void changeAppLang("zh")}>
+              中文
+            </Button>
+            <Button variant={!isZh ? "default" : "outline"} onClick={() => void changeAppLang("en")}>
+              English
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle>{t("baseDirTitle")}</CardTitle>
           <CardDescription>{t("baseDirDesc")}</CardDescription>
         </CardHeader>
@@ -81,6 +110,9 @@ export function SettingsPage({ token, username }: { token: string; username: str
               onChange={(e) => setBaseDirInput(e.target.value)}
               placeholder="~/repo"
             />
+            <Button variant="outline" onClick={() => void browseBaseDir()}>
+              {t("browse")}
+            </Button>
             <Button
               size="sm"
               variant="secondary"
@@ -145,23 +177,6 @@ export function SettingsPage({ token, username }: { token: string; username: str
                 {pwdMsg.text}
               </span>
             )}
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>语言 / Language</CardTitle>
-          <CardDescription>{t("langDesc")}</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex gap-2">
-            <Button variant={isZh ? "default" : "outline"} onClick={() => void changeAppLang("zh")}>
-              中文
-            </Button>
-            <Button variant={!isZh ? "default" : "outline"} onClick={() => void changeAppLang("en")}>
-              English
-            </Button>
           </div>
         </CardContent>
       </Card>

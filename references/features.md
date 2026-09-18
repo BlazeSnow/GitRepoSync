@@ -85,7 +85,7 @@
 
 ## 7. 设置页面
 
-- 修改本地仓库基地址（同步中转目录的父目录，默认 `~/repo`，支持 `~` 开头路径）
+- 修改本地仓库基地址（同步中转目录的父目录，默认 `~/repo`）：可手动输入，也可通过「浏览…」按钮调用系统目录选择器选择
 - 修改账户密码
 - 列出本软件版本号
 - 列出本软件源码仓库：[github.com/BlazeSnow/GitRepoSync](https://github.com/BlazeSnow/GitRepoSync)

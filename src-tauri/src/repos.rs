@@ -381,9 +381,9 @@ fn run_sync(
     );
     let base_dir = state
         .get_setting("base_dir")
-        .unwrap_or_else(|| crate::state::DEFAULT_BASE_DIR.to_string());
+        .unwrap_or_else(crate::state::default_base_dir);
     let (status, message) =
-        perform_git_sync(state, repo_id, &repo, &expand_home(&base_dir), lang);
+        perform_git_sync(state, repo_id, &repo, &Path::new(&base_dir), lang);
     let success = status == "success";
     finish(
         state,
@@ -404,20 +404,6 @@ fn run_sync(
             last_synced: if success { Some(now_ms()) } else { repo.last_synced },
         },
     )
-}
-
-/// 展开 base_dir 开头的 ~ 为用户主目录
-fn expand_home(path: &str) -> PathBuf {
-    if path == "~" {
-        if let Some(home) = dirs::home_dir() {
-            return home;
-        }
-    } else if let Some(rest) = path.strip_prefix("~/").or(path.strip_prefix("~\\")) {
-        if let Some(home) = dirs::home_dir() {
-            return home.join(rest);
-        }
-    }
-    PathBuf::from(path)
 }
 
 struct GitStep {
@@ -714,7 +700,9 @@ mod tests {
     }
 
     #[test]
-    fn norm_url_strips_protocol_and_suffix() {
-        assert_eq!(expand_home("~/repo"), dirs::home_dir().unwrap().join("repo"));
+    fn default_base_dir_is_absolute() {
+        let d = crate::state::default_base_dir();
+        assert!(d.ends_with("repo"));
+        assert!(!d.starts_with('~'));
     }
 }

@@ -1,6 +1,6 @@
 use crate::lang::{tr, tr_a, Lang};
 use crate::repos;
-use crate::state::{lock, AppState, Repo};
+use crate::state::{lock, normalize_base_dir, AppState, Repo};
 use rusqlite::params;
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
@@ -299,7 +299,7 @@ fn tools_call(state: &Arc<AppState>, lang: Lang, params: &Value) -> Result<Value
         }
         "get_base_dir" => Ok(json!({ "base_dir": state
             .get_setting("base_dir")
-            .unwrap_or_else(|| crate::state::DEFAULT_BASE_DIR.to_string()) })),
+            .unwrap_or_else(crate::state::default_base_dir) })),
         "set_base_dir" => {
             let base_dir = args
                 .get("base_dir")
@@ -310,6 +310,7 @@ fn tools_call(state: &Arc<AppState>, lang: Lang, params: &Value) -> Result<Value
             if base_dir.is_empty() {
                 return Err((-32602, tr(lang, "base-dir-empty")));
             }
+            let base_dir = normalize_base_dir(&base_dir);
             state.set_setting("base_dir", &base_dir);
             state.add_log(
                 &tr_a(lang, "log-mcp-base-dir-changed", &[("dir", &base_dir)]),

@@ -74,4 +74,4 @@ tool-sync-repo-id = 仓库 ID
 tool-get-sync-status = 查询所有仓库的最近同步状态
 tool-get-base-dir = 查询本地仓库基地址（中转站目录）
 tool-set-base-dir = 修改本地仓库基地址（中转站目录）
-tool-set-base-dir-base-dir = 基地址路径，支持 ~ 开头
+tool-set-base-dir-base-dir = 基地址完整路径

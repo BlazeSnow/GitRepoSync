@@ -19,7 +19,7 @@ export function SettingsPage({ token, username }: { token: string; username: str
   const isZh = i18n.language.toLowerCase().startsWith("zh");
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [baseDir, setBaseDir] = useState("");
-  const [baseDirInput, setBaseDirInput] = useState("");
+  const [baseDirLoading, setBaseDirLoading] = useState(false);
   const [oldPwd, setOldPwd] = useState("");
   const [newPwd, setNewPwd] = useState("");
   const [confirmPwd, setConfirmPwd] = useState("");
@@ -30,32 +30,28 @@ export function SettingsPage({ token, username }: { token: string; username: str
     api.getAppInfo(token).then(setAppInfo).catch(() => {});
     api
       .getBaseDir(token)
-      .then((dir) => {
-        setBaseDir(dir);
-        setBaseDirInput(dir);
-      })
+      .then(setBaseDir)
       .catch(() => {});
   }, [token]);
 
   async function browseBaseDir() {
     try {
-      const dir = await open({ directory: true, multiple: false });
+      const dir = await open({ directory: true, multiple: false, defaultPath: baseDir || undefined });
       if (typeof dir === "string" && dir) {
-        setBaseDirInput(dir);
+        setBaseDirLoading(true);
+        setBaseMsg(null);
+        try {
+          await api.setBaseDir(token, dir);
+          setBaseDir(dir);
+          setBaseMsg({ text: t("baseDirSaved"), ok: true });
+        } catch (err) {
+          setBaseMsg({ text: String(err), ok: false });
+        } finally {
+          setBaseDirLoading(false);
+        }
       }
     } catch {
       /* 用户取消或对话框不可用 */
-    }
-  }
-
-  async function handleSaveBaseDir() {
-    setBaseMsg(null);
-    try {
-      await api.setBaseDir(token, baseDirInput);
-      setBaseDir(baseDirInput.trim());
-      setBaseMsg({ text: t("baseDirSaved"), ok: true });
-    } catch (err) {
-      setBaseMsg({ text: String(err), ok: false });
     }
   }
 
@@ -104,32 +100,18 @@ export function SettingsPage({ token, username }: { token: string; username: str
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex items-center gap-3">
-            <Input
-              className="max-w-sm font-mono text-xs"
-              value={baseDirInput}
-              onChange={(e) => setBaseDirInput(e.target.value)}
-              placeholder="~/repo"
-            />
-            <Button variant="outline" onClick={() => void browseBaseDir()}>
+            <code className="min-w-0 flex-1 truncate rounded-md border bg-muted/50 px-3 py-2 font-mono text-xs">
+              {baseDir || "…"}
+            </code>
+            <Button variant="outline" disabled={baseDirLoading} onClick={() => void browseBaseDir()}>
               {t("browse")}
             </Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={handleSaveBaseDir}
-              disabled={!baseDirInput.trim() || baseDirInput === baseDir}
-            >
-              {t("save")}
-            </Button>
-            {baseMsg && (
-              <span className={`text-xs ${baseMsg.ok ? "text-success" : "text-destructive"}`}>
-                {baseMsg.text}
-              </span>
-            )}
           </div>
-          <p className="text-xs text-muted-foreground">
-            {t("currentBaseDir", { dir: baseDir || "…" })}
-          </p>
+          {baseMsg && (
+            <p className={`text-xs ${baseMsg.ok ? "text-success" : "text-destructive"}`}>
+              {baseMsg.text}
+            </p>
+          )}
         </CardContent>
       </Card>
 

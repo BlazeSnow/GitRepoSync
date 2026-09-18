@@ -75,4 +75,4 @@ tool-sync-repo-id = Repository ID
 tool-get-sync-status = Query the latest sync status of all repositories
 tool-get-base-dir = Query the local repository base directory (staging directory)
 tool-set-base-dir = Change the local repository base directory (staging directory)
-tool-set-base-dir-base-dir = Base directory path, may start with ~
+tool-set-base-dir-base-dir = Full path of the base directory

@@ -65,7 +65,28 @@ pub struct AppState {
     pub sync_queue: Mutex<SyncQueue>,
 }
 
-pub const DEFAULT_BASE_DIR: &str = "~/repo";
+/// 默认基地址：本机用户目录下的 repo 目录（完整路径）
+pub fn default_base_dir() -> String {
+    dirs::home_dir()
+        .map(|h| h.join("repo").to_string_lossy().to_string())
+        .unwrap_or_else(|| "repo".into())
+}
+
+/// 基地址统一以完整路径存储：以 ~ 开头的输入写入时展开（兼容旧数据与 MCP 入口）
+pub fn normalize_base_dir(path: &str) -> String {
+    let t = path.trim();
+    if t == "~" {
+        return dirs::home_dir()
+            .map(|h| h.to_string_lossy().to_string())
+            .unwrap_or_else(|| t.into());
+    }
+    if let Some(rest) = t.strip_prefix("~/").or_else(|| t.strip_prefix("~\\")) {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(rest).to_string_lossy().to_string();
+        }
+    }
+    t.to_string()
+}
 
 impl AppState {
     /// 打开（或创建）sqlite 数据库并初始化表结构与默认数据
@@ -145,7 +166,14 @@ impl AppState {
             }
         }
         if self.get_setting("base_dir").is_none() {
-            self.set_setting("base_dir", DEFAULT_BASE_DIR);
+            self.set_setting("base_dir", &default_base_dir());
+        } else {
+            // 存量数据迁移：~ 开头的旧值归一化为完整路径
+            let v = self.get_setting("base_dir").unwrap_or_default();
+            let n = normalize_base_dir(&v);
+            if n != v {
+                self.set_setting("base_dir", &n);
+            }
         }
         if self
             .get_setting("mcp_api_key")

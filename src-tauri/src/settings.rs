@@ -1,6 +1,6 @@
 use crate::auth::require_session;
 use crate::lang::{gui_lang, tr, tr_a};
-use crate::state::{lock, AppState, OperationLog, DEFAULT_BASE_DIR};
+use crate::state::{lock, normalize_base_dir, AppState, OperationLog};
 use rusqlite::params;
 use serde::Serialize;
 use std::sync::Arc;
@@ -36,7 +36,7 @@ pub fn get_base_dir(state: State<'_, Arc<AppState>>, token: String) -> Result<St
     require_session(&state, &token)?;
     Ok(state
         .get_setting("base_dir")
-        .unwrap_or_else(|| DEFAULT_BASE_DIR.to_string()))
+        .unwrap_or_else(crate::state::default_base_dir))
 }
 
 #[tauri::command]
@@ -50,6 +50,7 @@ pub fn set_base_dir(
     if base_dir.is_empty() {
         return Err(tr(gui_lang(), "base-dir-empty"));
     }
+    let base_dir = normalize_base_dir(&base_dir);
     state.set_setting("base_dir", &base_dir);
     state.add_log(
         &tr_a(gui_lang(), "log-base-dir-changed", &[("dir", &base_dir)]),

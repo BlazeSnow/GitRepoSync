@@ -54,14 +54,16 @@
 - 表格列：仓库、源地址、目标地址、状态、上次同步时间
 - 交互：双击或右键表格行后弹窗编辑；右键菜单含“编辑 / 立即同步 / 删除”
 - 仓库地址含义：源地址与目标地址均为 Git 仓库 URL（本地中转目录由基地址与仓库名派生，无需用户填写）
+- **未添加的仓库**：主表格下方列出主账号（提供商页面设置）下尚未添加的仓库（按规范化仓库 URL 与已添加列表比对）；点击“添加”打开预填了名称与源地址的编辑弹窗，补填目标地址即可入库；支持手动刷新
 
 ## 5. 提供商页面
 
 - 目前支持 GitHub、GitLab
 - 用户填入对应平台的 PAT（Personal Access Token）后，列出该账户及其组织
+- **主账号**：每个平台的账户卡片可“设为主账号”（带徽章标识）；同步仓库页面的“未添加的仓库”列表即来自主账号名下的仓库
 - GitHub PAT 建议 `repo` / `read:org` 权限；GitLab PAT 建议 `read_api` / `read_user` 权限
 
-**实现说明**：GitHub 调用 `api.github.com`（`Authorization: Bearer <PAT>`），GitLab 调用 `gitlab.com/api/v4`（`PRIVATE-TOKEN` 头）；PAT 入库 `providers` 表，界面仅显示掩码。
+**实现说明**：GitHub 调用 `api.github.com`（`Authorization: Bearer <PAT>`），GitLab 调用 `gitlab.com/api/v4`（`PRIVATE-TOKEN` 头）；PAT 入库 `providers` 表，界面仅显示掩码；主账号存于 `settings` 表（`primary_platform`）。
 
 ## 6. 日志页面
 

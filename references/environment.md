@@ -41,6 +41,17 @@ AGENTS.md 要求开发过程中处理终端 GBK 与 UTF-8 的关系：
 
 ## 4. 常用命令
 
+推荐使用仓库根目录的 [run.ps1](../run.ps1) 快速启动（自动切 UTF-8、检查依赖、按需构建）：
+
+```powershell
+.\run.ps1               # 快速启动 Debug 版（源码有改动时自动增量重建）
+.\run.ps1 -Dev          # 开发模式（热重载）
+.\run.ps1 -Build        # 打包发布版安装包
+.\run.ps1 -Rebuild      # 强制重建 Debug 版并启动
+```
+
+等价的原始命令：
+
 ```bash
 pnpm install            # 安装前端依赖
 pnpm tauri dev          # 以开发模式启动（前端热重载 + Rust 增量编译）

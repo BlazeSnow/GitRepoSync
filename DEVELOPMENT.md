@@ -27,6 +27,14 @@ Git Repo Sync 是一款跨平台的 Git 仓库同步桌面软件，用于将仓�
 
 ## 4. 快速开始
 
+```powershell
+.\run.ps1               # 快速启动 Debug 版（源码有改动时自动增量重建）
+.\run.ps1 -Dev          # 开发模式（前端热重载 + Rust 增量编译）
+.\run.ps1 -Build        # 打包发布版安装包
+```
+
+脚本会自动切换终端为 UTF-8、检查依赖并在首次运行时安装前端依赖。等价的原始命令：
+
 ```bash
 pnpm install            # 安装前端依赖
 pnpm tauri dev          # 以开发模式启动（前端热重载 + Rust 增量编译）
@@ -45,6 +53,7 @@ pnpm tauri build        # 构建发布版安装包
 ├── DEVELOPMENT.md       # 开发文档主入口
 ├── version.ps1          # 版本号同步（package.json → tauri.conf / Cargo）
 ├── tag.ps1              # 版本一致性检查 + 打 tag 发布
+├── run.ps1              # 快速启动（Debug 运行 / 开发模式 / 打包）
 ├── references/          # 开发文档详细内容
 │   ├── environment.md   # 环境准备与常用命令
 │   ├── features.md      # 功能设计与实现说明

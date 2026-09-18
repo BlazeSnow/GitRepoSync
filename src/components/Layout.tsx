@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 import { LangButton } from "@/components/LangButton";
 import {
   IconBranch,
-  IconCloud,
   IconList,
   IconLogout,
   IconPlug,
@@ -32,7 +31,6 @@ export function Layout({
   const { t } = useTranslation();
   const NAV_ITEMS: { key: PageKey; label: string; icon: (cls: string) => ReactNode }[] = [
     { key: "sync", label: t("navSync"), icon: (cls) => <IconBranch className={cls} /> },
-    { key: "providers", label: t("navProviders"), icon: (cls) => <IconCloud className={cls} /> },
     { key: "logs", label: t("navLogs"), icon: (cls) => <IconList className={cls} /> },
     { key: "mcp", label: t("navMcp"), icon: (cls) => <IconPlug className={cls} /> },
     { key: "settings", label: t("navSettings"), icon: (cls) => <IconSettings className={cls} /> },

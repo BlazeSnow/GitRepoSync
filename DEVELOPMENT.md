@@ -23,7 +23,7 @@ Git Repo Sync 是一款跨平台的 Git 仓库同步桌面软件，用于将仓�
 | 文档 | 内容 |
 | --- | --- |
 | [environment.md](./references/environment.md) | 环境准备与常用命令：基础依赖、各平台系统依赖、终端编码（GBK 与 UTF-8）处理 |
-| [features.md](./references/features.md) | 功能设计：用户登录、同步仓库页面、提供商页面、设置页面、Agent（MCP）接入 |
+| [features.md](./references/features.md) | 功能设计：用户登录、同步仓库、日志、MCP、设置、多语言 |
 | [release.md](./references/release.md) | 版本号规则与发布流程：version.ps1 / tag.ps1、GitHub Releases、beta 版本 |
 
 ## 4. 快速开始
@@ -65,7 +65,7 @@ pnpm tauri build        # 构建发布版安装包
 │   └── main.tsx
 ├── src-tauri/           # Rust 后端
 │   ├── locales/         # Fluent 语言包（zh-CN / en-US）
-│   ├── src/             # main / state / lang / auth / repos / providers / settings / mcp
+│   ├── src/             # main / state / lang / auth / repos / settings / mcp
 │   ├── Cargo.toml
 │   └── tauri.conf.json
 ├── index.html

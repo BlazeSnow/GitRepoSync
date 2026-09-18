@@ -6,7 +6,6 @@ fluent_i18n::i18n!("locales", fallback = "zh-CN");
 mod auth;
 mod lang;
 mod mcp;
-mod providers;
 mod repos;
 mod settings;
 mod state;
@@ -45,15 +44,9 @@ fn main() {
             repos::delete_repo,
             repos::start_sync,
             repos::stop_sync,
-            providers::get_providers,
-            providers::save_provider,
-            providers::fetch_provider_accounts,
-            providers::list_available_repos,
             settings::get_app_info,
             settings::get_base_dir,
             settings::set_base_dir,
-            settings::get_primary_platform,
-            settings::set_primary_platform,
             settings::get_mcp_config,
             settings::regenerate_mcp_api_key,
             settings::list_operation_logs,

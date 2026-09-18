@@ -42,14 +42,6 @@ git-wait-error = Failed to wait for git process
 process-terminated = Process was terminated
 
 # ---------- Providers ----------
-unsupported-platform = Unsupported platform
-pat-missing = Please save the PAT for this platform first
-pat-invalid = PAT is invalid or expired
-api-request-error = {$platform} API request failed: {$err}
-api-parse-error = Failed to parse {$platform} response: {$err}
-log-provider-saved = Saved {$platform} PAT
-log-provider-cleared = Cleared {$platform} PAT
-log-primary-set = Set primary account to {$platform}
 
 # ---------- Settings ----------
 base-dir-empty = Base directory must not be empty

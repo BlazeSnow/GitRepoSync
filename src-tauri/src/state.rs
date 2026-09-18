@@ -93,10 +93,6 @@ impl AppState {
                 last_status  TEXT NOT NULL DEFAULT 'idle',
                 last_message TEXT
             );
-            CREATE TABLE IF NOT EXISTS providers (
-                platform TEXT PRIMARY KEY,
-                pat      TEXT
-            );
             CREATE TABLE IF NOT EXISTS settings (
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL

@@ -58,35 +58,6 @@ pub fn set_base_dir(
     Ok(())
 }
 
-/// 主账号：提供商页面设置，用于在同步仓库页列出未添加的仓库
-#[tauri::command]
-pub fn get_primary_platform(
-    state: State<'_, Arc<AppState>>,
-    token: String,
-) -> Result<Option<String>, String> {
-    require_session(&state, &token)?;
-    Ok(state.get_setting("primary_platform"))
-}
-
-#[tauri::command]
-pub fn set_primary_platform(
-    state: State<'_, Arc<AppState>>,
-    token: String,
-    platform: String,
-) -> Result<(), String> {
-    let username = require_session(&state, &token)?;
-    match platform.as_str() {
-        "github" | "gitlab" => {}
-        _ => return Err(tr(gui_lang(), "unsupported-platform")),
-    }
-    state.set_setting("primary_platform", &platform);
-    state.add_log(
-        &tr_a(gui_lang(), "log-primary-set", &[("platform", &platform)]),
-        &username,
-    );
-    Ok(())
-}
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpConfig {

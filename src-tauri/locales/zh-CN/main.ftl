@@ -41,15 +41,6 @@ git-spawn-error = 无法启动 git：{$err}（请确认系统已安装 Git 并�
 git-wait-error = 等待 git 进程失败
 process-terminated = 进程已被终止
 
-# ---------- 提供商 ----------
-unsupported-platform = 不支持的平台
-pat-missing = 请先保存该平台的 PAT
-pat-invalid = PAT 无效或已过期
-api-request-error = {$platform} API 请求失败：{$err}
-api-parse-error = 解析 {$platform} 响应失败：{$err}
-log-provider-saved = 保存 {$platform} PAT
-log-provider-cleared = 清除 {$platform} PAT
-log-primary-set = 设置主账号为 {$platform}
 
 # ---------- 设置 ----------
 base-dir-empty = 基地址不能为空

@@ -27,7 +27,6 @@
 | `users` | 用户与密码哈希（随机盐 + SHA-256） |
 | `sessions` | 登录会话令牌（持久化登录，30 天有效） |
 | `repos` | 同步仓库列表与最近同步状态 |
-| `providers` | 平台 PAT（GitHub / GitLab） |
 | `settings` | 键值设置（`base_dir` 仓库基地址、`mcp_api_key`） |
 | `operation_logs` | 软件全部操作历史（操作、操作人、操作时间） |
 
@@ -54,24 +53,14 @@
 - 表格列：仓库、源地址、目标地址、状态、上次同步时间
 - 交互：双击或右键表格行后弹窗编辑；右键菜单含“编辑 / 立即同步 / 删除”
 - 仓库地址含义：源地址与目标地址均为 Git 仓库 URL（本地中转目录由基地址与仓库名派生，无需用户填写）
-- **未添加的仓库**：主表格下方列出主账号（提供商页面设置）下尚未添加的仓库（按规范化仓库 URL 与已添加列表比对）；点击“添加”打开预填了名称与源地址的编辑弹窗，补填目标地址即可入库；支持手动刷新
 
-## 5. 提供商页面
-
-- 目前支持 GitHub、GitLab
-- 用户填入对应平台的 PAT（Personal Access Token）后，列出该账户及其组织
-- **主账号**：每个平台的账户卡片可“设为主账号”（带徽章标识）；同步仓库页面的“未添加的仓库”列表即来自主账号名下的仓库
-- GitHub PAT 建议 `repo` / `read:org` 权限；GitLab PAT 建议 `read_api` / `read_user` 权限
-
-**实现说明**：GitHub 调用 `api.github.com`（`Authorization: Bearer <PAT>`），GitLab 调用 `gitlab.com/api/v4`（`PRIVATE-TOKEN` 头）；PAT 入库 `providers` 表，界面仅显示掩码；主账号存于 `settings` 表（`primary_platform`）。
-
-## 6. 日志页面
+## 5. 日志页面
 
 - 以表格形式按时间倒序列出软件操作历史：操作时间、操作、操作人（默认最近 500 条）
 - 软件操作全部入库 sqlite `operation_logs` 表，覆盖：登录 / 登录失败 / 退出登录、修改密码、添加 / 编辑 / 删除仓库、开始 / 停止同步及同步结果、保存 / 清除 PAT、修改基地址、重新生成 MCP APIKEY、MCP 工具调用
 - 操作人：界面操作为登录用户名，Agent 调用为 `mcp`
 
-## 7. MCP 页面
+## 6. MCP 页面
 
 - 列出 MCP 连接配置信息（API Key、客户端配置示例），帮助用户理解配置；支持复制与重新生成 APIKEY
 - 列出 MCP 可用工具及说明
@@ -90,14 +79,14 @@
 | `get_base_dir` | 查询本地仓库基地址 |
 | `set_base_dir` | 修改本地仓库基地址 |
 
-## 8. 设置页面
+## 7. 设置页面
 
 - 修改本地仓库基地址（同步中转目录的父目录，默认 `~/repo`，支持 `~` 开头路径）
 - 修改账户密码
 - 列出本软件版本号
 - 列出本软件源码仓库：[github.com/BlazeSnow/GitRepoSync](https://github.com/BlazeSnow/GitRepoSync)
 
-## 9. 多语言（中文 / English）
+## 8. 多语言（中文 / English）
 
 - 后端采用 [fluent-i18n](https://crates.io/crates/fluent-i18n)，全部文案集中在 `src-tauri/locales/zh-CN/main.ftl`（默认与回落语言）与 `en-US/main.ftl`，编译期内嵌
 - 前端采用 [react-i18next](https://react.i18next.dev/)（词典内嵌 `src/i18n.ts`），登录页与侧边栏均可切换语言，选择存入 localStorage，首次启动按浏览器语言自动选择

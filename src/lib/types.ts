@@ -1,4 +1,4 @@
-export type PageKey = "sync" | "providers" | "logs" | "mcp" | "settings";
+export type PageKey = "sync" | "logs" | "mcp" | "settings";
 
 export type SyncStatus = "idle" | "running" | "success" | "failed" | "stopped";
 
@@ -28,29 +28,6 @@ export interface McpConfig {
   exePath: string;
 }
 
-export interface OrgInfo {
-  login: string;
-  name: string;
-  avatarUrl: string;
-  description: string;
-}
-
-export interface AccountInfo {
-  platform: string;
-  login: string;
-  name: string;
-  avatarUrl: string;
-  orgs: OrgInfo[];
-}
-
-export type ProviderPlatform = "github" | "gitlab";
-
-export interface ProviderInfo {
-  platform: string;
-  hasPat: boolean;
-  patMasked: string | null;
-}
-
 export interface SyncEvent {
   id: string;
   status: SyncStatus;
@@ -65,13 +42,3 @@ export interface OperationLog {
   createdAt: number;
 }
 
-export interface AvailableRepo {
-  platform: string;
-  platformId: number;
-  name: string;
-  fullName: string;
-  cloneUrl: string;
-  sshUrl: string;
-  description: string;
-  private: boolean;
-}

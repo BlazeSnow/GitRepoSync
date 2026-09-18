@@ -65,14 +65,12 @@ pub struct Providers {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
-    pub mcp_port: u16,
     pub mcp_api_key: String,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            mcp_port: 17878,
             mcp_api_key: String::new(),
         }
     }
@@ -131,7 +129,6 @@ impl AppState {
             settings.mcp_api_key = format!("grs_{}", Uuid::new_v4().simple());
             save_json(&settings_path, &settings)?;
         }
-
         Ok(Self {
             sessions: Mutex::new(load_json(&data_dir.join("sessions.json")).unwrap_or_default()),
             repos: Mutex::new(repos),

@@ -1,83 +1,53 @@
 use crate::repos;
 use crate::state::{lock, AppState, Repo};
 use serde_json::{json, Value};
-use std::io::Cursor;
+use std::io::{BufRead, Write};
 use std::sync::Arc;
-use std::thread;
-use tiny_http::{Header, Method, Response, Server};
 use uuid::Uuid;
 
-type Resp = Response<Cursor<Vec<u8>>>;
-
-/// 在独立线程中启动 MCP 服务（Streamable HTTP / JSON-RPC 2.0，APIKEY 鉴权）
-pub fn start_server(state: Arc<AppState>, port: u16) {
-    thread::spawn(move || {
-        let server = match Server::http(("127.0.0.1", port)) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("MCP 服务启动失败（端口 {port}）：{e}");
-                return;
+/// MCP stdio 主循环：逐行读取 stdin 的 JSON-RPC 2.0 消息并应答（通知类消息不应答）。
+/// 鉴权：客户端须通过环境变量 GIT_REPO_SYNC_API_KEY 或 --api-key 参数提供 APIKEY，
+/// 与设置页生成的 APIKEY 一致方可访问；不一致时所有请求均被拒绝。
+pub fn run_stdio(state: Arc<AppState>, provided_key: Option<String>) {
+    let authorized = {
+        let expected = lock(&state.settings).mcp_api_key.clone();
+        !expected.is_empty()
+            && provided_key.is_some()
+            && provided_key.as_deref() == Some(expected.as_str())
+    };
+    let stdin = std::io::stdin();
+    let mut out = std::io::stdout().lock();
+    loop {
+        let mut line = String::new();
+        match stdin.lock().read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                if let Some(response) = handle_line(&state, authorized, line) {
+                    let _ = writeln!(out, "{response}");
+                    let _ = out.flush();
+                }
             }
-        };
-        println!("MCP 服务已启动：http://127.0.0.1:{port}/mcp");
-        loop {
-            let mut request = match server.recv() {
-                Ok(r) => r,
-                Err(_) => break,
-            };
-            let response = handle_request(&state, &mut request);
-            let _ = request.respond(response);
+            Err(e) => {
+                eprintln!("stdin 读取失败: {e}");
+                break;
+            }
         }
-    });
+    }
 }
 
-fn respond_json(status: u16, body: &Value) -> Resp {
-    let header = Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
-        .expect("static header");
-    Response::from_string(serde_json::to_string(body).unwrap_or_default())
-        .with_header(header)
-        .with_status_code(status)
-}
-
-fn respond_empty(status: u16) -> Resp {
-    Response::from_string(String::new()).with_status_code(status)
-}
-
-fn handle_request(state: &Arc<AppState>, request: &mut tiny_http::Request) -> Resp {
-    if request.method() != &Method::Post
-        || !request.url().split('?').next().unwrap_or("").starts_with("/mcp")
-    {
-        return respond_json(404, &json!({ "error": "not found" }));
-    }
-
-    // APIKEY 鉴权：Authorization: Bearer <key> 或 X-Api-Key: <key>
-    let expected = lock(&state.settings).mcp_api_key.clone();
-    let provided = request
-        .headers()
-        .iter()
-        .find(|h| h.field.equiv("Authorization"))
-        .map(|h| h.value.as_str().to_string())
-        .and_then(|h| h.strip_prefix("Bearer ").map(|s| s.trim().to_string()))
-        .or_else(|| {
-            request
-                .headers()
-                .iter()
-                .find(|h| h.field.equiv("X-Api-Key"))
-                .map(|h| h.value.as_str().to_string())
-        });
-    match provided {
-        Some(k) if !expected.is_empty() && k == expected => {}
-        _ => return respond_json(401, &json!({ "error": "unauthorized" })),
-    }
-
-    let mut body = String::new();
-    if request.as_reader().read_to_string(&mut body).is_err() {
-        return respond_json(400, &json!({ "error": "invalid body" }));
-    }
-    let v: Value = match serde_json::from_str(&body) {
+/// 返回 None 表示无需应答（通知类消息）
+fn handle_line(state: &Arc<AppState>, authorized: bool, line: &str) -> Option<String> {
+    let v: Value = match serde_json::from_str(line) {
         Ok(v) => v,
         Err(_) => {
-            return respond_json(200, &json!({ "jsonrpc": "2.0", "id": null, "error": { "code": -32700, "message": "parse error" } }))
+            return Some(
+                json!({ "jsonrpc": "2.0", "id": null, "error": { "code": -32700, "message": "parse error" } })
+                    .to_string(),
+            )
         }
     };
     let id = v.get("id").cloned().unwrap_or(Value::Null);
@@ -87,9 +57,14 @@ fn handle_request(state: &Arc<AppState>, request: &mut tiny_http::Request) -> Re
         .unwrap_or("")
         .to_string();
 
-    // 通知类请求无响应体
+    // 通知类消息不应答
     if method.starts_with("notifications/") {
-        return respond_empty(202);
+        return None;
+    }
+
+    // APIKEY 鉴权：启动时校验，未通过时所有请求均拒绝
+    if !authorized {
+        return Some(rpc_error(&id, -32001, "unauthorized: APIKEY 不正确").to_string());
     }
 
     let params = v.get("params").cloned().unwrap_or(json!({}));
@@ -105,13 +80,16 @@ fn handle_request(state: &Arc<AppState>, request: &mut tiny_http::Request) -> Re
         other => Err((-32601, format!("method not found: {other}"))),
     };
 
-    match result {
-        Ok(r) => respond_json(200, &json!({ "jsonrpc": "2.0", "id": id, "result": r })),
-        Err((code, msg)) => respond_json(
-            200,
-            &json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": msg } }),
-        ),
-    }
+    Some(match result {
+        Ok(r) => json!({ "jsonrpc": "2.0", "id": id, "result": r }).to_string(),
+        Err((code, msg)) => {
+            json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": msg } }).to_string()
+        }
+    })
+}
+
+fn rpc_error(id: &Value, code: i64, message: &str) -> Value {
+    json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }
 
 fn tools_list() -> Value {

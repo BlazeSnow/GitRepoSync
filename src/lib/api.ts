@@ -54,9 +54,6 @@ export const api = {
   getMcpConfig(token: string) {
     return invoke<McpConfig>("get_mcp_config", { token });
   },
-  setMcpPort(token: string, port: number) {
-    return invoke<void>("set_mcp_port", { token, port });
-  },
   regenerateMcpKey(token: string) {
     return invoke<string>("regenerate_mcp_api_key", { token });
   },

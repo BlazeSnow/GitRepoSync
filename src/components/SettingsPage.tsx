@@ -13,25 +13,43 @@ export function SettingsPage({ token, username }: { token: string; username: str
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [mcp, setMcp] = useState<McpConfig | null>(null);
   const [repos, setRepos] = useState<Repo[]>([]);
-  const [portInput, setPortInput] = useState("");
   const [oldPwd, setOldPwd] = useState("");
   const [newPwd, setNewPwd] = useState("");
   const [confirmPwd, setConfirmPwd] = useState("");
   const [pwdMsg, setPwdMsg] = useState<{ text: string; ok: boolean } | null>(null);
-  const [portMsg, setPortMsg] = useState<{ text: string; ok: boolean } | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState("");
 
   useEffect(() => {
     api.getAppInfo(token).then(setAppInfo).catch(() => {});
-    api
-      .getMcpConfig(token)
-      .then((c) => {
-        setMcp(c);
-        setPortInput(String(c.port));
-      })
-      .catch(() => {});
+    api.getMcpConfig(token).then(setMcp).catch(() => {});
     api.listRepos(token).then(setRepos).catch(() => {});
   }, [token]);
+
+  const mcpExample = mcp
+    ? JSON.stringify(
+        {
+          mcpServers: {
+            "git-repo-sync": {
+              command: mcp.exePath,
+              args: ["mcp"],
+              env: { GIT_REPO_SYNC_API_KEY: mcp.apiKey },
+            },
+          },
+        },
+        null,
+        2,
+      )
+    : "";
+
+  async function copyText(text: string, marker: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(marker);
+      setTimeout(() => setCopied(""), 1500);
+    } catch {
+      /* 剪贴板不可用 */
+    }
+  }
 
   async function handleChangePassword() {
     setPwdMsg(null);
@@ -50,34 +68,12 @@ export function SettingsPage({ token, username }: { token: string; username: str
     }
   }
 
-  async function handleSavePort() {
-    setPortMsg(null);
-    try {
-      const port = Number(portInput);
-      await api.setMcpPort(token, port);
-      setPortMsg({ text: "已保存，重启应用后生效", ok: true });
-    } catch (err) {
-      setPortMsg({ text: String(err), ok: false });
-    }
-  }
-
   async function handleRegenerateKey() {
     try {
       const key = await api.regenerateMcpKey(token);
       setMcp((c) => (c ? { ...c, apiKey: key } : c));
     } catch {
       /* 忽略 */
-    }
-  }
-
-  async function handleCopyKey() {
-    if (!mcp) return;
-    try {
-      await navigator.clipboard.writeText(mcp.apiKey);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* 剪贴板不可用 */
     }
   }
 
@@ -125,7 +121,7 @@ export function SettingsPage({ token, username }: { token: string; username: str
         <CardHeader>
           <CardTitle>Agent（MCP 接入）</CardTitle>
           <CardDescription>
-            Agent 通过 MCP 协议连接本软件，使用 APIKEY 鉴权，可管理仓库并触发同步
+            Agent 通过 MCP stdio 方式连接本软件（APIKEY 鉴权），可管理仓库并触发同步
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -135,30 +131,43 @@ export function SettingsPage({ token, username }: { token: string; username: str
               <code className="min-w-0 flex-1 truncate rounded-md border bg-muted/50 px-3 py-2 font-mono text-xs">
                 {mcp?.apiKey ?? "…"}
               </code>
-              <Button variant="outline" size="icon" title="复制" onClick={handleCopyKey}>
+              <Button
+                variant="outline"
+                size="icon"
+                title="复制"
+                onClick={() => mcp && copyText(mcp.apiKey, "key")}
+              >
                 <IconCopy />
               </Button>
               <Button variant="outline" size="icon" title="重新生成" onClick={handleRegenerateKey}>
                 <IconRefresh />
               </Button>
             </div>
-            {copied && <p className="text-xs text-success">已复制到剪贴板</p>}
+            {copied === "key" && <p className="text-xs text-success">已复制到剪贴板</p>}
           </div>
+
           <div className="space-y-1.5">
-            <Label htmlFor="mcp-port">服务端口</Label>
-            <div className="flex items-center gap-3">
-              <Input id="mcp-port" type="number" className="w-32" value={portInput} onChange={(e) => setPortInput(e.target.value)} />
-              <Button size="sm" variant="secondary" onClick={handleSavePort}>
-                保存
+            <Label>MCP 客户端配置示例</Label>
+            <div className="relative">
+              <pre className="overflow-x-auto rounded-md border bg-muted/50 p-3 pr-12 font-mono text-xs leading-relaxed">
+                {mcpExample || "…"}
+              </pre>
+              <Button
+                variant="outline"
+                size="icon"
+                className="absolute right-2 top-2"
+                title="复制配置"
+                onClick={() => copyText(mcpExample, "config")}
+              >
+                <IconCopy />
               </Button>
-              {portMsg && (
-                <span className={`text-xs ${portMsg.ok ? "text-success" : "text-destructive"}`}>{portMsg.text}</span>
-              )}
             </div>
+            {copied === "config" && <p className="text-xs text-success">已复制到剪贴板</p>}
             <p className="text-xs text-muted-foreground">
-              连接地址：http://127.0.0.1:{mcp?.port ?? "—"}/mcp
+              将以上配置加入 MCP 客户端后，Agent 以子进程方式运行本程序的 mcp 模式（stdio 通信）。
             </p>
           </div>
+
           <div className="text-xs text-muted-foreground">
             可用工具：list_repos、add_repo、remove_repo、sync_repo、get_sync_status
           </div>

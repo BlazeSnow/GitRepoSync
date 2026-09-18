@@ -31,34 +31,28 @@ pub fn get_app_info(
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpConfig {
-    pub port: u16,
     pub api_key: String,
+    pub exe_path: String,
 }
 
 #[tauri::command]
 pub fn get_mcp_config(state: State<'_, Arc<AppState>>, token: String) -> Result<McpConfig, String> {
     require_session(&state, &token)?;
+    let exe_path = std::env::current_exe()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
     let s = lock(&state.settings);
     Ok(McpConfig {
-        port: s.mcp_port,
         api_key: s.mcp_api_key.clone(),
+        exe_path,
     })
 }
 
 #[tauri::command]
-pub fn set_mcp_port(state: State<'_, Arc<AppState>>, token: String, port: u16) -> Result<(), String> {
-    require_session(&state, &token)?;
-    if port < 1024 {
-        return Err("端口需要大于 1024".into());
-    }
-    {
-        lock(&state.settings).mcp_port = port;
-    }
-    state.save_settings()
-}
-
-#[tauri::command]
-pub fn regenerate_mcp_api_key(state: State<'_, Arc<AppState>>, token: String) -> Result<String, String> {
+pub fn regenerate_mcp_api_key(
+    state: State<'_, Arc<AppState>>,
+    token: String,
+) -> Result<String, String> {
     require_session(&state, &token)?;
     let key = format!("grs_{}", Uuid::new_v4().simple());
     {

@@ -22,8 +22,8 @@ export interface AppInfo {
 }
 
 export interface McpConfig {
-  port: number;
   apiKey: string;
+  exePath: string;
 }
 
 export interface OrgInfo {

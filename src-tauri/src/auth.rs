@@ -1,3 +1,4 @@
+use crate::lang::{gui_lang, tr};
 use crate::state::{lock, AppState};
 use chrono::Utc;
 use rusqlite::params;
@@ -17,17 +18,15 @@ pub fn hash_password(salt: &str, password: &str) -> String {
 /// 校验会话令牌，过期会话顺手清理；成功返回用户名
 pub fn require_session(state: &AppState, token: &str) -> Result<String, String> {
     let now = Utc::now().timestamp();
+    let lang = gui_lang();
     let conn = lock(&state.conn);
-    let _ = conn.execute(
-        "DELETE FROM sessions WHERE expires_at <= ?1",
-        params![now],
-    );
+    let _ = conn.execute("DELETE FROM sessions WHERE expires_at <= ?1", params![now]);
     conn.query_row(
         "SELECT username FROM sessions WHERE token = ?1 AND expires_at > ?2",
         params![token, now],
         |r| r.get::<_, String>(0),
     )
-    .map_err(|_| "登录已失效，请重新登录".to_string())
+    .map_err(|_| tr(lang, "session-expired"))
 }
 
 #[derive(serde::Serialize)]
@@ -44,6 +43,7 @@ pub fn login(
     password: String,
     remember: Option<bool>,
 ) -> Result<LoginResult, String> {
+    let lang = gui_lang();
     let authed = {
         let conn = lock(&state.conn);
         conn.query_row(
@@ -55,8 +55,8 @@ pub fn login(
         .unwrap_or(false)
     };
     if !authed {
-        state.add_log("登录失败（用户名或密码错误）", &username);
-        return Err("用户名或密码错误".into());
+        state.add_log(&tr(lang, "login-failed-log"), &username);
+        return Err(tr(lang, "invalid-credentials"));
     }
 
     let days: i64 = if remember.unwrap_or(false) { 30 } else { 1 };
@@ -69,11 +69,8 @@ pub fn login(
         )
         .map_err(|e| e.to_string())?;
     }
-    state.add_log("登录", &username);
-    Ok(LoginResult {
-        token,
-        username,
-    })
+    state.add_log(&tr(lang, "log-login"), &username);
+    Ok(LoginResult { token, username })
 }
 
 #[tauri::command]
@@ -83,13 +80,14 @@ pub fn restore_session(state: State<'_, Arc<AppState>>, token: String) -> Result
 
 #[tauri::command]
 pub fn logout(state: State<'_, Arc<AppState>>, token: String) -> Result<(), String> {
+    let lang = gui_lang();
     let username = require_session(&state, &token);
     {
         let conn = lock(&state.conn);
         let _ = conn.execute("DELETE FROM sessions WHERE token = ?1", params![token]);
     }
     if let Ok(user) = username {
-        state.add_log("退出登录", &user);
+        state.add_log(&tr(lang, "log-logout"), &user);
     }
     Ok(())
 }
@@ -101,20 +99,21 @@ pub fn change_password(
     old_password: String,
     new_password: String,
 ) -> Result<(), String> {
+    let lang = gui_lang();
     let username = require_session(&state, &token)?;
     if new_password.chars().count() < 6 {
-        return Err("新密码至少需要 6 个字符".into());
+        return Err(tr(lang, "new-password-too-short"));
     }
     let conn = lock(&state.conn);
     let user = conn
         .query_row(
             "SELECT salt, password_hash FROM users WHERE username = ?1",
             params![username],
-            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
         )
-        .map_err(|_| "用户不存在".to_string())?;
+        .map_err(|_| tr(lang, "user-not-found"))?;
     if hash_password(&user.0, &old_password) != user.1 {
-        return Err("旧密码不正确".into());
+        return Err(tr(lang, "wrong-password"));
     }
     let salt = Uuid::new_v4().simple().to_string();
     conn.execute(
@@ -123,6 +122,6 @@ pub fn change_password(
     )
     .map_err(|e| e.to_string())?;
     drop(conn);
-    state.add_log("修改密码", &username);
+    state.add_log(&tr(lang, "log-change-password"), &username);
     Ok(())
 }

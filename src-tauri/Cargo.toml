@@ -18,6 +18,7 @@ hex = "0.4"
 rand = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "5"
+fluent-i18n = "0.1.0"
 rusqlite = { version = "0.32", features = ["bundled"] }
 reqwest = { version = "0.12", default-features = false, features = [
   "json",

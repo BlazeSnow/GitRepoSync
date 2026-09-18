@@ -1,6 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+// 编译期内嵌 locales/ 语言包为静态 LOCALES（回落 zh-CN）
+fluent_i18n::i18n!("locales", fallback = "zh-CN");
+
 mod auth;
+mod lang;
 mod mcp;
 mod providers;
 mod repos;
@@ -50,6 +54,7 @@ fn main() {
             settings::get_mcp_config,
             settings::regenerate_mcp_api_key,
             settings::list_operation_logs,
+            lang::set_lang,
         ])
         .run(tauri::generate_context!())
         .expect("Git Repo Sync 启动失败");

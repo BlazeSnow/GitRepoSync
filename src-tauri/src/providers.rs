@@ -1,4 +1,5 @@
 use crate::auth::require_session;
+use crate::lang::{gui_lang, tr, tr_a};
 use crate::state::{lock, AppState};
 use rusqlite::params;
 use serde::Serialize;
@@ -90,7 +91,7 @@ pub fn save_provider(
     let pat = pat.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     match platform.as_str() {
         "github" | "gitlab" => {}
-        _ => return Err("不支持的平台".into()),
+        _ => return Err(tr(gui_lang(), "unsupported-platform")),
     }
     {
         let conn = lock(&state.conn);
@@ -102,10 +103,14 @@ pub fn save_provider(
         .map_err(|e| e.to_string())?;
     }
     state.add_log(
-        &match &pat {
-            Some(_) => format!("保存 {platform} PAT"),
-            None => format!("清除 {platform} PAT"),
-        },
+        &tr_a(
+            gui_lang(),
+            match &pat {
+                Some(_) => "log-provider-saved",
+                None => "log-provider-cleared",
+            },
+            &[("platform", &platform)],
+        ),
         &username,
     );
     Ok(())
@@ -118,12 +123,12 @@ pub async fn fetch_provider_accounts(
     platform: String,
 ) -> Result<AccountInfo, String> {
     require_session(&state, &token)?;
-    let pat = get_pat(&state, &platform).ok_or("请先保存该平台的 PAT")?;
+    let pat = get_pat(&state, &platform).ok_or_else(|| tr(gui_lang(), "pat-missing"))?;
 
     match platform.as_str() {
         "github" => fetch_github(&platform, &pat).await,
         "gitlab" => fetch_gitlab(&platform, &pat).await,
-        _ => Err("不支持的平台".into()),
+        _ => Err(tr(gui_lang(), "unsupported-platform")),
     }
 }
 
@@ -135,10 +140,15 @@ fn json_str(v: &serde_json::Value, key: &str) -> String {
 }
 
 fn api_err(e: reqwest::Error, platform: &str) -> String {
+    let lang = gui_lang();
     if e.status() == Some(reqwest::StatusCode::UNAUTHORIZED) {
-        "PAT 无效或已过期".into()
+        tr(lang, "pat-invalid")
     } else {
-        format!("{platform} API 请求失败：{e}")
+        tr_a(
+            lang,
+            "api-request-error",
+            &[("platform", platform), ("err", &e.to_string())],
+        )
     }
 }
 
@@ -161,7 +171,7 @@ async fn fetch_github(platform: &str, pat: &str) -> Result<AccountInfo, String> 
         .map_err(|e| api_err(e, platform))?
         .json()
         .await
-        .map_err(|e| format!("解析 GitHub 响应失败：{e}"))?;
+        .map_err(|e| tr_a(gui_lang(), "api-parse-error", &[("platform", platform), ("err", &e.to_string())]))?;
 
     let orgs_raw: serde_json::Value = build("https://api.github.com/user/orgs")
         .send()
@@ -171,7 +181,7 @@ async fn fetch_github(platform: &str, pat: &str) -> Result<AccountInfo, String> 
         .map_err(|e| api_err(e, platform))?
         .json()
         .await
-        .map_err(|e| format!("解析 GitHub 响应失败：{e}"))?;
+        .map_err(|e| tr_a(gui_lang(), "api-parse-error", &[("platform", platform), ("err", &e.to_string())]))?;
 
     let mut orgs = Vec::new();
     if let Some(arr) = orgs_raw.as_array() {
@@ -221,7 +231,7 @@ async fn fetch_gitlab(platform: &str, pat: &str) -> Result<AccountInfo, String> 
         .map_err(|e| api_err(e, platform))?
         .json()
         .await
-        .map_err(|e| format!("解析 GitLab 响应失败：{e}"))?;
+        .map_err(|e| tr_a(gui_lang(), "api-parse-error", &[("platform", platform), ("err", &e.to_string())]))?;
 
     let groups_raw: serde_json::Value = build(format!(
         "{base}/groups?per_page=100&min_access_role=10"
@@ -233,7 +243,7 @@ async fn fetch_gitlab(platform: &str, pat: &str) -> Result<AccountInfo, String> 
     .map_err(|e| api_err(e, platform))?
     .json()
     .await
-    .map_err(|e| format!("解析 GitLab 响应失败：{e}"))?;
+    .map_err(|e| tr_a(gui_lang(), "api-parse-error", &[("platform", platform), ("err", &e.to_string())]))?;
 
     let mut orgs = Vec::new();
     if let Some(arr) = groups_raw.as_array() {

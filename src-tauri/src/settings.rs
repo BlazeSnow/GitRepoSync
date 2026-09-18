@@ -1,4 +1,5 @@
 use crate::auth::require_session;
+use crate::lang::{gui_lang, tr, tr_a};
 use crate::state::{lock, AppState, OperationLog, DEFAULT_BASE_DIR};
 use rusqlite::params;
 use serde::Serialize;
@@ -47,10 +48,13 @@ pub fn set_base_dir(
     let username = require_session(&state, &token)?;
     let base_dir = base_dir.trim().to_string();
     if base_dir.is_empty() {
-        return Err("基地址不能为空".into());
+        return Err(tr(gui_lang(), "base-dir-empty"));
     }
     state.set_setting("base_dir", &base_dir);
-    state.add_log(&format!("修改仓库基地址为 {base_dir}"), &username);
+    state.add_log(
+        &tr_a(gui_lang(), "log-base-dir-changed", &[("dir", &base_dir)]),
+        &username,
+    );
     Ok(())
 }
 
@@ -83,7 +87,10 @@ pub fn regenerate_mcp_api_key(
     let username = require_session(&state, &token)?;
     let key = format!("grs_{}", Uuid::new_v4().simple());
     state.set_setting("mcp_api_key", &key);
-    state.add_log("重新生成 MCP APIKEY", &username);
+    state.add_log(
+        &tr(gui_lang(), "log-mcp-key-regenerated"),
+        &username,
+    );
     Ok(key)
 }
 

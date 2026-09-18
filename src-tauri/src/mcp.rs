@@ -1,3 +1,4 @@
+use crate::lang::{tr, tr_a, Lang};
 use crate::repos;
 use crate::state::{lock, AppState, Repo};
 use rusqlite::params;
@@ -11,6 +12,7 @@ const OPERATOR: &str = "mcp";
 /// MCP stdio 主循环：逐行读取 stdin 的 JSON-RPC 2.0 消息并应答（通知类消息不应答）。
 /// 鉴权：客户端须通过环境变量 GIT_REPO_SYNC_API_KEY 或 --api-key 参数提供 APIKEY，
 /// 与设置页生成的 APIKEY 一致方可访问；不一致时所有请求均被拒绝。
+/// 会话语言：initialize 请求的 locale 字段（可被 GIT_REPO_SYNC_LANG 覆盖），缺省中文。
 pub fn run_stdio(state: Arc<AppState>, provided_key: Option<String>) {
     let authorized = {
         let expected = state.get_setting("mcp_api_key").unwrap_or_default();
@@ -18,6 +20,7 @@ pub fn run_stdio(state: Arc<AppState>, provided_key: Option<String>) {
             && provided_key.is_some()
             && provided_key.as_deref() == Some(expected.as_str())
     };
+    let mut session_lang = Lang::from_env();
     let stdin = std::io::stdin();
     let mut out = std::io::stdout().lock();
     loop {
@@ -29,7 +32,7 @@ pub fn run_stdio(state: Arc<AppState>, provided_key: Option<String>) {
                 if line.is_empty() {
                     continue;
                 }
-                if let Some(response) = handle_line(&state, authorized, line) {
+                if let Some(response) = handle_line(&state, authorized, &mut session_lang, line) {
                     let _ = writeln!(out, "{response}");
                     let _ = out.flush();
                 }
@@ -43,7 +46,12 @@ pub fn run_stdio(state: Arc<AppState>, provided_key: Option<String>) {
 }
 
 /// 返回 None 表示无需应答（通知类消息）
-fn handle_line(state: &Arc<AppState>, authorized: bool, line: &str) -> Option<String> {
+fn handle_line(
+    state: &Arc<AppState>,
+    authorized: bool,
+    session_lang: &mut Lang,
+    line: &str,
+) -> Option<String> {
     let v: Value = match serde_json::from_str(line) {
         Ok(v) => v,
         Err(_) => {
@@ -67,20 +75,31 @@ fn handle_line(state: &Arc<AppState>, authorized: bool, line: &str) -> Option<St
 
     // APIKEY 鉴权：启动时校验，未通过时所有请求均拒绝
     if !authorized {
-        return Some(rpc_error(&id, -32001, "unauthorized: APIKEY 不正确").to_string());
+        return Some(rpc_error(&id, -32001, &tr(*session_lang, "mcp-unauthorized")).to_string());
     }
 
     let params = v.get("params").cloned().unwrap_or(json!({}));
     let result = match method.as_str() {
-        "initialize" => Ok(json!({
-            "protocolVersion": "2024-11-05",
-            "capabilities": { "tools": {} },
-            "serverInfo": { "name": "git-repo-sync", "version": env!("CARGO_PKG_VERSION") }
-        })),
+        "initialize" => {
+            // 客户端 locale 决定本次会话的后续消息语言
+            if let Some(locale) = params.get("locale").and_then(|l| l.as_str()) {
+                if let Some(l) = Lang::parse_tag(Some(locale)) {
+                    *session_lang = l;
+                }
+            }
+            Ok(json!({
+                "protocolVersion": "2024-11-05",
+                "capabilities": { "tools": {} },
+                "serverInfo": { "name": "git-repo-sync", "version": env!("CARGO_PKG_VERSION") }
+            }))
+        }
         "ping" => Ok(json!({})),
-        "tools/list" => Ok(tools_list()),
-        "tools/call" => tools_call(state, &params),
-        other => Err((-32601, format!("method not found: {other}"))),
+        "tools/list" => Ok(tools_list(*session_lang)),
+        "tools/call" => tools_call(state, *session_lang, &params),
+        other => Err((
+            -32601,
+            tr_a(*session_lang, "mcp-method-not-found", &[("method", other)]),
+        )),
     };
 
     Some(match result {
@@ -95,61 +114,62 @@ fn rpc_error(id: &Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }
 
-fn tools_list() -> Value {
+/// 工具描述按会话语言返回；工具名称为协议契约，不翻译
+fn tools_list(lang: Lang) -> Value {
     json!({
         "tools": [
             {
                 "name": "list_repos",
-                "description": "列出所有已配置的同步仓库及其最近一次同步状态",
+                "description": tr(lang, "tool-list-repos"),
                 "inputSchema": { "type": "object", "properties": {} }
             },
             {
                 "name": "add_repo",
-                "description": "新增一个同步仓库：从源仓库拉取到本地基地址作为中转站（更新 LFS 与 submodule），再推送到目标仓库地址",
+                "description": tr(lang, "tool-add-repo"),
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "name": { "type": "string", "description": "仓库名称（同时是本地基地址下的目录名）" },
-                        "source": { "type": "string", "description": "源地址（Git 仓库 URL）" },
-                        "target": { "type": "string", "description": "目标仓库地址（Git 仓库 URL）" }
+                        "name": { "type": "string", "description": tr(lang, "tool-add-repo-name") },
+                        "source": { "type": "string", "description": tr(lang, "tool-add-repo-source") },
+                        "target": { "type": "string", "description": tr(lang, "tool-add-repo-target") }
                     },
                     "required": ["name", "source", "target"]
                 }
             },
             {
                 "name": "remove_repo",
-                "description": "删除指定的同步仓库",
+                "description": tr(lang, "tool-remove-repo"),
                 "inputSchema": {
                     "type": "object",
-                    "properties": { "id": { "type": "string", "description": "仓库 ID" } },
+                    "properties": { "id": { "type": "string", "description": tr(lang, "tool-remove-repo-id") } },
                     "required": ["id"]
                 }
             },
             {
                 "name": "sync_repo",
-                "description": "立即开始同步指定仓库（异步执行，可用 get_sync_status 查询进度）",
+                "description": tr(lang, "tool-sync-repo"),
                 "inputSchema": {
                     "type": "object",
-                    "properties": { "id": { "type": "string", "description": "仓库 ID" } },
+                    "properties": { "id": { "type": "string", "description": tr(lang, "tool-sync-repo-id") } },
                     "required": ["id"]
                 }
             },
             {
                 "name": "get_sync_status",
-                "description": "查询所有仓库的最近同步状态",
+                "description": tr(lang, "tool-get-sync-status"),
                 "inputSchema": { "type": "object", "properties": {} }
             },
             {
                 "name": "get_base_dir",
-                "description": "查询本地仓库基地址（中转站目录）",
+                "description": tr(lang, "tool-get-base-dir"),
                 "inputSchema": { "type": "object", "properties": {} }
             },
             {
                 "name": "set_base_dir",
-                "description": "修改本地仓库基地址（中转站目录）",
+                "description": tr(lang, "tool-set-base-dir"),
                 "inputSchema": {
                     "type": "object",
-                    "properties": { "base_dir": { "type": "string", "description": "基地址路径，支持 ~ 开头" } },
+                    "properties": { "base_dir": { "type": "string", "description": tr(lang, "tool-set-base-dir-base-dir") } },
                     "required": ["base_dir"]
                 }
             }
@@ -184,7 +204,7 @@ fn list_repos_value(state: &AppState) -> Result<Value, String> {
     serde_json::to_value(repos).map_err(|e| e.to_string())
 }
 
-fn tools_call(state: &Arc<AppState>, params: &Value) -> Result<Value, (i64, String)> {
+fn tools_call(state: &Arc<AppState>, lang: Lang, params: &Value) -> Result<Value, (i64, String)> {
     let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
     let args = params.get("arguments").cloned().unwrap_or(json!({}));
 
@@ -200,7 +220,7 @@ fn tools_call(state: &Arc<AppState>, params: &Value) -> Result<Value, (i64, Stri
             };
             let (rname, source, target) = (field("name"), field("source"), field("target"));
             if rname.is_empty() || source.is_empty() || target.is_empty() {
-                return Err((-32602, "name / source / target 不能为空".into()));
+                return Err((-32602, tr(lang, "repo-fields-empty")));
             }
             let repo = Repo {
                 id: Uuid::new_v4().to_string(),
@@ -228,7 +248,10 @@ fn tools_call(state: &Arc<AppState>, params: &Value) -> Result<Value, (i64, Stri
                 )
                 .map_err(|e| (-32602, e.to_string()))?;
             }
-            state.add_log(&format!("通过 MCP 添加仓库「{rname}」"), OPERATOR);
+            state.add_log(
+                &tr_a(lang, "log-mcp-repo-added", &[("name", &rname)]),
+                OPERATOR,
+            );
             serde_json::to_value(repo).map_err(|e| e.to_string())
         }
         "remove_repo" => {
@@ -238,7 +261,7 @@ fn tools_call(state: &Arc<AppState>, params: &Value) -> Result<Value, (i64, Stri
                 .unwrap_or("")
                 .to_string();
             if lock(&state.syncing).contains(&id) {
-                return Err((-32602, "该仓库正在同步，请先停止".into()));
+                return Err((-32602, tr(lang, "repo-syncing")));
             }
             let deleted = {
                 let conn = lock(&state.conn);
@@ -246,9 +269,9 @@ fn tools_call(state: &Arc<AppState>, params: &Value) -> Result<Value, (i64, Stri
                     .map_err(|e| (-32602, e.to_string()))?
             };
             if deleted == 0 {
-                return Err((-32602, "仓库不存在".into()));
+                return Err((-32602, tr(lang, "repo-not-found")));
             }
-            state.add_log("通过 MCP 删除仓库", OPERATOR);
+            state.add_log(&tr(lang, "log-mcp-repo-deleted"), OPERATOR);
             Ok(json!({ "deleted": true }))
         }
         "sync_repo" => {
@@ -268,10 +291,10 @@ fn tools_call(state: &Arc<AppState>, params: &Value) -> Result<Value, (i64, Stri
                     > 0
             };
             if !exists {
-                return Err((-32602, "仓库不存在".into()));
+                return Err((-32602, tr(lang, "repo-not-found")));
             }
-            let started = repos::spawn_sync(state.clone(), None, id, OPERATOR.to_string());
-            state.add_log("通过 MCP 触发同步", OPERATOR);
+            let started = repos::spawn_sync(state.clone(), None, id, OPERATOR.to_string(), lang);
+            state.add_log(&tr(lang, "log-mcp-sync"), OPERATOR);
             Ok(json!({ "started": started }))
         }
         "get_base_dir" => Ok(json!({ "base_dir": state
@@ -285,13 +308,21 @@ fn tools_call(state: &Arc<AppState>, params: &Value) -> Result<Value, (i64, Stri
                 .trim()
                 .to_string();
             if base_dir.is_empty() {
-                return Err((-32602, "base_dir 不能为空".into()));
+                return Err((-32602, tr(lang, "base-dir-empty")));
             }
             state.set_setting("base_dir", &base_dir);
-            state.add_log(&format!("通过 MCP 修改仓库基地址为 {base_dir}"), OPERATOR);
+            state.add_log(
+                &tr_a(lang, "log-mcp-base-dir-changed", &[("dir", &base_dir)]),
+                OPERATOR,
+            );
             Ok(json!({ "base_dir": base_dir }))
         }
-        _ => return Err((-32602, format!("unknown tool: {name}"))),
+        _ => {
+            return Err((
+                -32602,
+                tr_a(lang, "mcp-unknown-tool", &[("tool", name)]),
+            ))
+        }
     };
 
     match result {

@@ -1,4 +1,5 @@
 use crate::auth::require_session;
+use crate::lang::{gui_lang, tr, tr_a, Lang};
 use crate::state::{lock, now_ms, AppState, Repo, SyncHandle};
 use rusqlite::params;
 use serde::Serialize;
@@ -66,11 +67,12 @@ pub fn save_repo(
     target: String,
 ) -> Result<Repo, String> {
     let username = require_session(&state, &token)?;
+    let lang = gui_lang();
     let name = name.trim().to_string();
     let source = source.trim().to_string();
     let target = target.trim().to_string();
     if name.is_empty() || source.is_empty() || target.is_empty() {
-        return Err("仓库名称、源地址、目标地址均不能为空".into());
+        return Err(tr(lang, "repo-fields-empty"));
     }
     let repo = {
         let conn = lock(&state.conn);
@@ -82,7 +84,7 @@ pub fn save_repo(
                 )
                 .map_err(|e| e.to_string())?;
             if updated == 0 {
-                return Err("仓库不存在".into());
+                return Err(tr(lang, "repo-not-found"));
             }
             conn.query_row(
                 &format!("SELECT {REPO_COLS} FROM repos WHERE id = ?1"),
@@ -118,7 +120,15 @@ pub fn save_repo(
         }
     };
     state.add_log(
-        &format!("{}仓库「{}」", if id.is_some() { "编辑" } else { "添加" }, repo.name),
+        &tr_a(
+            lang,
+            if id.is_some() {
+                "log-repo-edited"
+            } else {
+                "log-repo-added"
+            },
+            &[("name", &repo.name)],
+        ),
         &username,
     );
     Ok(repo)
@@ -131,8 +141,9 @@ pub fn delete_repo(
     id: String,
 ) -> Result<(), String> {
     let username = require_session(&state, &token)?;
+    let lang = gui_lang();
     if lock(&state.syncing).contains(&id) {
-        return Err("该仓库正在同步，请先停止同步".into());
+        return Err(tr(lang, "repo-syncing"));
     }
     let name = {
         let conn = lock(&state.conn);
@@ -140,12 +151,12 @@ pub fn delete_repo(
             .query_row("SELECT name FROM repos WHERE id = ?1", params![id], |r| {
                 r.get::<_, String>(0)
             })
-            .map_err(|_| "仓库不存在".to_string())?;
+            .map_err(|_| tr(lang, "repo-not-found"))?;
         conn.execute("DELETE FROM repos WHERE id = ?1", params![id])
             .map_err(|e| e.to_string())?;
         name
     };
-    state.add_log(&format!("删除仓库「{name}」"), &username);
+    state.add_log(&tr_a(lang, "log-repo-deleted", &[("name", &name)]), &username);
     Ok(())
 }
 
@@ -157,9 +168,16 @@ pub fn start_sync(
     ids: Vec<String>,
 ) -> Result<usize, String> {
     let username = require_session(&state, &token)?;
+    let lang = gui_lang();
     let mut started = 0;
     for id in ids {
-        if spawn_sync(state.inner().clone(), Some(app.clone()), id, username.clone()) {
+        if spawn_sync(
+            state.inner().clone(),
+            Some(app.clone()),
+            id,
+            username.clone(),
+            lang,
+        ) {
             started += 1;
         }
     }
@@ -211,6 +229,7 @@ pub fn spawn_sync(
     app: Option<AppHandle>,
     repo_id: String,
     operator: String,
+    lang: Lang,
 ) -> bool {
     {
         let mut syncing = lock(&state.syncing);
@@ -222,7 +241,7 @@ pub fn spawn_sync(
     lock(&state.stop_requested).remove(&repo_id);
     let st = state.clone();
     thread::spawn(move || {
-        run_sync(&st, &app, &repo_id, &operator);
+        run_sync(&st, &app, &repo_id, &operator, lang);
         lock(&st.syncing).remove(&repo_id);
         lock(&st.stop_requested).remove(&repo_id);
     });
@@ -245,6 +264,7 @@ fn finish(
     message: Option<String>,
     update_time: bool,
     operator: &str,
+    lang: Lang,
 ) {
     {
         let conn = lock(&state.conn);
@@ -260,15 +280,25 @@ fn finish(
             );
         }
     }
-    let action = match status {
-        "success" => format!("同步仓库「{repo_name}」成功"),
-        "stopped" => format!("同步仓库「{repo_name}」已停止"),
-        _ => format!("同步仓库「{repo_name}」失败"),
-    };
+    let action = tr_a(
+        lang,
+        match status {
+            "success" => "log-sync-success",
+            "stopped" => "log-sync-stopped",
+            _ => "log-sync-failed",
+        },
+        &[("name", repo_name)],
+    );
     state.add_log(&action, operator);
 }
 
-fn run_sync(state: &AppState, app: &Option<AppHandle>, repo_id: &str, operator: &str) {
+fn run_sync(
+    state: &AppState,
+    app: &Option<AppHandle>,
+    repo_id: &str,
+    operator: &str,
+    lang: Lang,
+) {
     let repo = {
         let conn = lock(&state.conn);
         conn.query_row(
@@ -291,12 +321,15 @@ fn run_sync(state: &AppState, app: &Option<AppHandle>, repo_id: &str, operator: 
         },
     );
 
-    state.add_log(&format!("开始同步仓库「{}」", repo.name), operator);
+    state.add_log(
+        &tr_a(lang, "log-sync-started", &[("name", &repo.name)]),
+        operator,
+    );
     let base_dir = state
         .get_setting("base_dir")
         .unwrap_or_else(|| crate::state::DEFAULT_BASE_DIR.to_string());
     let (status, message) =
-        perform_git_sync(state, repo_id, &repo, &expand_home(&base_dir));
+        perform_git_sync(state, repo_id, &repo, &expand_home(&base_dir), lang);
     let success = status == "success";
     finish(
         state,
@@ -306,6 +339,7 @@ fn run_sync(state: &AppState, app: &Option<AppHandle>, repo_id: &str, operator: 
         Some(message.clone()),
         success,
         operator,
+        lang,
     );
     emit_status(
         app,
@@ -335,7 +369,7 @@ fn expand_home(path: &str) -> PathBuf {
 struct GitStep {
     args: Vec<String>,
     cwd: Option<PathBuf>,
-    ok_msg: &'static str,
+    ok_msg: String,
 }
 
 /// 同步流水线（AGENTS.md 软件逻辑）：
@@ -347,9 +381,10 @@ fn perform_git_sync(
     repo_id: &str,
     repo: &Repo,
     base_dir: &Path,
+    lang: Lang,
 ) -> (String, String) {
     let local = base_dir.join(&repo.name);
-    let mut done: Vec<&'static str> = Vec::new();
+    let mut done: Vec<String> = Vec::new();
     let mut steps: Vec<GitStep> = Vec::new();
 
     if local.exists() {
@@ -361,7 +396,7 @@ fn perform_git_sync(
                 repo.source.clone(),
             ],
             cwd: Some(local.clone()),
-            ok_msg: "",
+            ok_msg: String::new(),
         });
         steps.push(GitStep {
             args: vec![
@@ -371,12 +406,12 @@ fn perform_git_sync(
                 "--tags".into(),
             ],
             cwd: Some(local.clone()),
-            ok_msg: "拉取源仓库更新",
+            ok_msg: tr(lang, "step-fetch"),
         });
         steps.push(GitStep {
             args: vec!["pull".into(), "--ff-only".into()],
             cwd: Some(local.clone()),
-            ok_msg: "",
+            ok_msg: String::new(),
         });
     } else {
         if let Some(parent) = local.parent() {
@@ -389,7 +424,7 @@ fn perform_git_sync(
                 local.to_string_lossy().to_string(),
             ],
             cwd: None,
-            ok_msg: "从源仓库克隆到本地中转站",
+            ok_msg: tr(lang, "step-clone"),
         });
     }
 
@@ -405,7 +440,7 @@ fn perform_git_sync(
         steps.push(GitStep {
             args: vec!["lfs".into(), "pull".into()],
             cwd: Some(local.clone()),
-            ok_msg: "更新 LFS 文件",
+            ok_msg: tr(lang, "step-lfs"),
         });
     }
 
@@ -417,7 +452,7 @@ fn perform_git_sync(
             "--recursive".into(),
         ],
         cwd: Some(local.clone()),
-        ok_msg: "更新 submodule",
+        ok_msg: tr(lang, "step-submodule"),
     });
     steps.push(GitStep {
         args: vec![
@@ -427,24 +462,24 @@ fn perform_git_sync(
             "+refs/tags/*:refs/tags/*".into(),
         ],
         cwd: Some(local.clone()),
-        ok_msg: "推送到目标仓库",
+        ok_msg: tr(lang, "step-push"),
     });
 
     for step in &steps {
         // “停止同步”请求：kill 之后的剩余步骤不再执行
         if lock(&state.stop_requested).contains(repo_id) {
-            return ("stopped".into(), "已手动停止".into());
+            return ("stopped".into(), tr(lang, "manually-stopped"));
         }
-        match run_git(state, repo_id, &step.args, step.cwd.as_deref()) {
+        match run_git(state, repo_id, &step.args, step.cwd.as_deref(), lang) {
             Err(e) => {
                 if lock(&state.stop_requested).contains(repo_id) {
-                    return ("stopped".into(), "已手动停止".into());
+                    return ("stopped".into(), tr(lang, "manually-stopped"));
                 }
                 // 仅 git-lfs 未安装允许跳过
                 if step.args.first().map(String::as_str) == Some("lfs")
                     && e.contains("is not a git command")
                 {
-                    done.push("未检测到 git-lfs，已跳过 LFS 更新");
+                    done.push(tr(lang, "lfs-skipped"));
                     continue;
                 }
                 return ("failed".into(), e);
@@ -452,18 +487,18 @@ fn perform_git_sync(
             Ok(_) => {}
         }
         if !step.ok_msg.is_empty() {
-            done.push(step.ok_msg);
+            done.push(step.ok_msg.clone());
         }
     }
 
     let lfs_note = if !lfs_available {
-        "；未检测到 git-lfs，已跳过 LFS 更新"
+        format!("{}{}", lang.sep(), tr(lang, "lfs-skipped"))
     } else {
-        ""
+        String::new()
     };
     (
         "success".into(),
-        format!("{}{lfs_note}", done.join("；")),
+        format!("{}{lfs_note}", done.join(lang.sep())),
     )
 }
 
@@ -474,6 +509,7 @@ fn run_git(
     repo_id: &str,
     args: &[String],
     cwd: Option<&Path>,
+    lang: Lang,
 ) -> Result<String, String> {
     let mut cmd = Command::new("git");
     cmd.args(args);
@@ -484,7 +520,7 @@ fn run_git(
     }
     let mut child = cmd
         .spawn()
-        .map_err(|e| format!("无法启动 git：{e}（请确认系统已安装 Git 并加入 PATH）"))?;
+        .map_err(|e| tr_a(lang, "git-spawn-error", &[("err", &e.to_string())]))?;
 
     // stderr 交给独立线程收集，避免管道写满阻塞
     let stderr = child.stderr.take();
@@ -526,7 +562,7 @@ fn run_git(
     let text = text.trim().to_string();
 
     if killed {
-        return Err("进程已被终止".into());
+        return Err(tr(lang, "process-terminated"));
     }
     match status {
         Some(s) if s.success() => Ok(text),
@@ -538,6 +574,6 @@ fn run_git(
                 text
             })
         }
-        None => Err("等待 git 进程失败".into()),
+        None => Err(tr(lang, "git-wait-error")),
     }
 }

@@ -2,7 +2,6 @@ import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { LangButton } from "@/components/LangButton";
 import {
   IconBranch,
   IconList,
@@ -63,7 +62,6 @@ export function Layout({
           ))}
         </nav>
         <div className="space-y-2 border-t px-3 py-3">
-          <LangButton />
           <div className="px-1 text-xs text-muted-foreground">{t("currentUser", { user: username })}</div>
           <Button variant="ghost" size="sm" className="w-full justify-start" onClick={onLogout}>
             <IconLogout className="h-4 w-4" />

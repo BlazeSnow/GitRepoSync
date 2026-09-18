@@ -7,12 +7,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useTranslation } from "react-i18next";
+import { changeAppLang } from "@/i18n";
 
 /** 本软件的源码仓库 */
 const SOURCE_REPO_URL = "https://github.com/BlazeSnow/GitRepoSync";
 
 export function SettingsPage({ token, username }: { token: string; username: string }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const isZh = i18n.language.toLowerCase().startsWith("zh");
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [baseDir, setBaseDir] = useState("");
   const [baseDirInput, setBaseDirInput] = useState("");
@@ -142,6 +144,23 @@ export function SettingsPage({ token, username }: { token: string; username: str
                 {pwdMsg.text}
               </span>
             )}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>语言 / Language</CardTitle>
+          <CardDescription>{t("langDesc")}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex gap-2">
+            <Button variant={isZh ? "default" : "outline"} onClick={() => void changeAppLang("zh")}>
+              中文
+            </Button>
+            <Button variant={!isZh ? "default" : "outline"} onClick={() => void changeAppLang("en")}>
+              English
+            </Button>
           </div>
         </CardContent>
       </Card>

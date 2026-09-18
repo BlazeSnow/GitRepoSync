@@ -5,7 +5,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api } from "@/lib/api";
-import { LangButton } from "@/components/LangButton";
 import { Logo } from "@/components/icons";
 
 export function Login({
@@ -38,11 +37,7 @@ export function Login({
     <div className="flex h-full items-center justify-center bg-muted/40">
       <Card className="w-[380px]">
         <CardHeader className="items-center text-center">
-          <div className="mx-auto flex w-full items-center justify-between">
-            <span />
-            <Logo className="h-16 w-16" />
-            <LangButton />
-          </div>
+          <Logo className="mx-auto h-16 w-16" />
           <CardTitle className="text-xl">Git Repo Sync</CardTitle>
           <CardDescription>{t("loginSubtitle")}</CardDescription>
         </CardHeader>

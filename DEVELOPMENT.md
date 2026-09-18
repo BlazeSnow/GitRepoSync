@@ -23,7 +23,7 @@ Git Repo Sync 是一款跨平台的 Git 仓库同步桌面软件，用于将仓�
 | --- | --- |
 | [environment.md](./references/environment.md) | 环境准备与常用命令：基础依赖、各平台系统依赖、终端编码（GBK 与 UTF-8）处理 |
 | [features.md](./references/features.md) | 功能设计：用户登录、同步仓库页面、提供商页面、设置页面、Agent（MCP）接入 |
-| [release.md](./references/release.md) | 构建与发布：GitHub Actions 打包、GitHub Releases、beta 版本 |
+| [release.md](./references/release.md) | 版本号规则与发布流程：version.ps1 / tag.ps1、GitHub Releases、beta 版本 |
 
 ## 4. 快速开始
 
@@ -38,14 +38,17 @@ pnpm tauri build        # 构建发布版安装包
 ## 5. 项目结构
 
 ```
-├── .github/workflows/release.yml  # GitHub Actions 发布工作流
+├── .github/workflows/   # CI：release.yml（打 tag 发布）+ check.yml（PR 版本校验）
+├── ci/                  # CI 辅助脚本（版本一致性校验、Linux 依赖）
 ├── AGENTS.md            # 开发/Agent 约定（禁止修改）
 ├── CHANGELOG.md         # 变更记录（每完成一项功能后更新）
 ├── DEVELOPMENT.md       # 开发文档主入口
+├── version.ps1          # 版本号同步（package.json → tauri.conf / Cargo）
+├── tag.ps1              # 版本一致性检查 + 打 tag 发布
 ├── references/          # 开发文档详细内容
 │   ├── environment.md   # 环境准备与常用命令
 │   ├── features.md      # 功能设计与实现说明
-│   └── release.md       # 构建与发布
+│   └── release.md       # 版本号规则与发布流程
 ├── src/                 # 前端代码（React + TypeScript）
 │   ├── components/      # 页面组件与 shadcn/ui 风格基础组件（ui/）
 │   ├── lib/             # Tauri 命令封装（api.ts）、类型、工具函数

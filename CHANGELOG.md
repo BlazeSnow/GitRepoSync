@@ -18,6 +18,5 @@
 
 ### 🚀 改进
 
-- ⬆️ 前后端依赖全量升级：前端 React 18 → 19、Vite 6 → 8（rolldown 打包）、Tailwind CSS 3 → 4（CSS-first 主题配置）、TypeScript 5 → 7、tailwind-merge 2 → 3、@vitejs/plugin-react 4 → 6；后端 sha2 0.10 → 0.11、dirs 5 → 7、rusqlite 0.32 → 0.40、reqwest 0.12 → 0.13（rustls 特性更名），移除未使用的 rand 依赖
 - 📦 发布流水线：GitHub Actions 四平台矩阵打包（Windows x64、macOS Apple Silicon / Intel、Linux x64），tag 推送后自动发布至 GitHub Releases；`vX.Y.Z-beta.N` 形式的 tag 自动标记为 Prerelease；MSI 版本采用独立发布序列号（第 N 次发布为 1.0.N），规避 MSI 版本不支持 beta 语义的问题，保证新旧版本可覆盖升级
 - 🖼️ 图片资源统一由 Git LFS 管理，CI 检出时自动拉取

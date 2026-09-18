@@ -1,3 +1,5 @@
+# https://github.com/marketplace/actions/tauri-action
+
 name: Release
 
 on:
@@ -5,41 +7,48 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-          - os: macos-latest
-            target: aarch64-apple-darwin
-          - os: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-    permissions:
-      contents: write
-    runs-on: ${{ matrix.os }}
+          - platform: "macos-latest" # Apple Silicon (M 系列芯片)
+            args: "--target aarch64-apple-darwin"
+          - platform: "macos-latest" # Intel 芯片
+            args: "--target x86_64-apple-darwin"
+          - platform: "ubuntu-22.04"
+            args: ""
+          - platform: "windows-latest"
+            args: ""
+
+    runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           lfs: true
 
-      - name: 安装 pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 12
+      - name: 检查版本一致性
+        shell: bash
+        run: bash ci/check-version.sh "${GITHUB_REF_NAME#v}"
 
       - name: 安装 Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: 20
-          cache: pnpm
+          node-version: 26
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 12
 
       - name: 安装 Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Rust 缓存
         uses: swatinem/rust-cache@v2
@@ -47,23 +56,20 @@ jobs:
           workspaces: src-tauri
 
       - name: 安装 Linux 系统依赖
-        if: matrix.os == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
-            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+        if: matrix.platform == 'ubuntu-22.04'
+        run: bash ci/linux-deps.sh
 
       - name: 安装前端依赖
         run: pnpm install --frozen-lockfile
 
-      - name: 构建并发布
-        uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: v__VERSION__
-          releaseName: "Git Repo Sync v__VERSION__"
-          releaseBody: "查看资产以下载对应平台的安装包。"
+          tagName: ${{ github.ref_name }}
+          releaseName: "Git Repo Sync ${{ github.ref_name }}"
+          releaseBody: "完整更新日志见 [CHANGELOG.md](https://github.com/BlazeSnow/GitRepoSync/blob/main/CHANGELOG.md)"
           releaseDraft: false
-          prerelease: ${{ contains(github.ref_name, 'beta') }}
-          args: --target ${{ matrix.target }}
+          prerelease: ${{ contains(github.ref_name, '-beta') }}
+          uploadUpdaterJson: false
+          args: ${{ matrix.args }}

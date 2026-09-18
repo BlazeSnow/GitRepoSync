@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useTranslation } from "react-i18next";
 import { changeAppLang } from "@/i18n";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 /** 本软件的源码仓库 */
 const SOURCE_REPO_URL = "https://github.com/BlazeSnow/GitRepoSync";
@@ -176,14 +177,14 @@ export function SettingsPage({ token, username }: { token: string; username: str
           </div>
           <div className="flex items-center gap-2">
             <span className="w-32 shrink-0 text-muted-foreground">{t("repoLinkLabel")}</span>
-            <a
-              href={SOURCE_REPO_URL}
-              target="_blank"
-              rel="noreferrer"
+            <button
+              type="button"
+              title={t("openRepoLink")}
               className="truncate font-mono text-xs text-primary underline-offset-2 hover:underline"
+              onClick={() => void openUrl(SOURCE_REPO_URL).catch(() => {})}
             >
               {SOURCE_REPO_URL}
-            </a>
+            </button>
           </div>
         </CardContent>
       </Card>

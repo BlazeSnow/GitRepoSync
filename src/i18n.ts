@@ -106,6 +106,7 @@ const zh = {
   softwareInfo: "软件信息",
   versionLabel: "版本号",
   repoLinkLabel: "本软件仓库",
+  openRepoLink: "在系统浏览器中打开",
   restoring: "正在恢复登录…",
 };
 
@@ -209,6 +210,7 @@ const en = {
   softwareInfo: "App info",
   versionLabel: "Version",
   repoLinkLabel: "Source repository",
+  openRepoLink: "Open in system browser",
   restoring: "Restoring session…",
 };
 

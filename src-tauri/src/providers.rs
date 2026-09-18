@@ -4,6 +4,7 @@ use crate::state::{lock, AppState};
 use rusqlite::params;
 use serde::Serialize;
 use std::sync::Arc;
+use std::time::Duration;
 use tauri::State;
 
 #[derive(Clone, Serialize)]
@@ -58,6 +59,15 @@ fn mask(pat: &str) -> String {
             chars[chars.len() - 4..].iter().collect::<String>()
         )
     }
+}
+
+/// 平台 API 专用客户端：网络异常时超时返回错误，而不是无限挂起
+fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
+        .build()
+        .expect("构建 HTTP 客户端失败")
 }
 
 fn get_pat(state: &AppState, platform: &str) -> Option<String> {
@@ -167,7 +177,7 @@ fn api_err(e: reqwest::Error, platform: &str) -> String {
 }
 
 async fn fetch_github(platform: &str, pat: &str) -> Result<AccountInfo, String> {
-    let client = reqwest::Client::new();
+    let client = http_client();
     let build = |url: &str| {
         client
             .get(url)
@@ -228,7 +238,7 @@ async fn fetch_github(platform: &str, pat: &str) -> Result<AccountInfo, String> 
 }
 
 async fn fetch_gitlab(platform: &str, pat: &str) -> Result<AccountInfo, String> {
-    let client = reqwest::Client::new();
+    let client = http_client();
     let base = "https://gitlab.com/api/v4";
     let build = |url: String| {
         client
@@ -345,7 +355,7 @@ pub async fn list_available_repos(
 }
 
 async fn fetch_github_repos(platform: &str, pat: &str) -> Result<Vec<AvailableRepo>, String> {
-    let client = reqwest::Client::new();
+    let client = http_client();
     let raw: serde_json::Value = client
         .get("https://api.github.com/user/repos?per_page=100&type=owner&sort=full_name")
         .header("Authorization", format!("Bearer {pat}"))
@@ -380,7 +390,7 @@ async fn fetch_github_repos(platform: &str, pat: &str) -> Result<Vec<AvailableRe
 }
 
 async fn fetch_gitlab_repos(platform: &str, pat: &str) -> Result<Vec<AvailableRepo>, String> {
-    let client = reqwest::Client::new();
+    let client = http_client();
     let raw: serde_json::Value = client
         .get("https://gitlab.com/api/v4/projects?owned=true&per_page=100&order_by=name")
         .header("PRIVATE-TOKEN", pat)

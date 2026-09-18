@@ -45,7 +45,9 @@ export function SyncPage({ token }: { token: string }) {
   const [menu, setMenu] = useState<{ x: number; y: number; repo: Repo } | null>(null);
   const [error, setError] = useState("");
   const [available, setAvailable] = useState<AvailableRepo[] | null>(null);
-  const [availablePlatform, setAvailablePlatform] = useState<string>("");
+  const [availablePlatform, setAvailablePlatform] = useState<string | null>(null);
+  const [availableLoading, setAvailableLoading] = useState(false);
+  const [availableError, setAvailableError] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -57,18 +59,24 @@ export function SyncPage({ token }: { token: string }) {
   }, [token]);
 
   const loadAvailable = useCallback(async () => {
+    setAvailableLoading(true);
+    setAvailableError("");
     try {
       const platform = await api.getPrimaryPlatform(token);
+      setAvailablePlatform(platform);
       if (!platform) {
         setAvailable(null);
         return;
       }
-      setAvailablePlatform(platform);
       setAvailable(await api.listAvailableRepos(token));
-    } catch {
-      setAvailable(null);
+    } catch (err) {
+      // 保留区块并展示错误；未设置主账号时隐藏区块
+      if (availablePlatform !== null) setAvailableError(String(err));
+      else setAvailable(null);
+    } finally {
+      setAvailableLoading(false);
     }
-  }, [token]);
+  }, [token, availablePlatform]);
 
   useEffect(() => {
     void load();
@@ -287,7 +295,7 @@ export function SyncPage({ token }: { token: string }) {
         </Table>
       </div>
 
-      {available !== null && (
+      {availablePlatform !== null && (
         <div className="mt-4 rounded-lg border bg-card p-4">
           <div className="mb-3 flex items-center gap-3">
             <h2 className="text-sm font-semibold">{t("availableTitle")}</h2>
@@ -297,12 +305,21 @@ export function SyncPage({ token }: { token: string }) {
               </span>
             )}
             <div className="flex-1" />
-            <Button variant="outline" size="sm" onClick={() => void loadAvailable()}>
-              <IconRefresh />
-              {t("refresh")}
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={availableLoading}
+              onClick={() => void loadAvailable()}
+            >
+              <IconRefresh className={availableLoading ? "animate-spin" : ""} />
+              {availableLoading ? t("loading") : t("refresh")}
             </Button>
           </div>
-          {available.length === 0 ? (
+          {availableError ? (
+            <p className="text-sm text-destructive">{availableError}</p>
+          ) : available === null || availableLoading ? (
+            <p className="text-sm text-muted-foreground">{t("loading")}</p>
+          ) : available.length === 0 ? (
             <p className="text-sm text-muted-foreground">{t("availableEmpty")}</p>
           ) : (
             <div className="space-y-1.5">

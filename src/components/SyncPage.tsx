@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "@/lib/api";
-import type { Repo, SyncEvent, SyncStatus } from "@/lib/types";
+import type { AvailableRepo, Repo, SyncEvent, SyncStatus } from "@/lib/types";
 import { useTranslation } from "react-i18next";
 import { relativeTime } from "@/i18n";
 import { Badge } from "@/components/ui/badge";
@@ -44,6 +44,8 @@ export function SyncPage({ token }: { token: string }) {
   const [deleteTarget, setDeleteTarget] = useState<Repo | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; repo: Repo } | null>(null);
   const [error, setError] = useState("");
+  const [available, setAvailable] = useState<AvailableRepo[] | null>(null);
+  const [availablePlatform, setAvailablePlatform] = useState<string>("");
 
   const load = useCallback(async () => {
     try {
@@ -54,15 +56,30 @@ export function SyncPage({ token }: { token: string }) {
     }
   }, [token]);
 
+  const loadAvailable = useCallback(async () => {
+    try {
+      const platform = await api.getPrimaryPlatform(token);
+      if (!platform) {
+        setAvailable(null);
+        return;
+      }
+      setAvailablePlatform(platform);
+      setAvailable(await api.listAvailableRepos(token));
+    } catch {
+      setAvailable(null);
+    }
+  }, [token]);
+
   useEffect(() => {
     void load();
+    void loadAvailable();
     const unlisten = listen<SyncEvent>("sync-status", () => {
       void load();
     });
     return () => {
       void unlisten.then((f) => f());
     };
-  }, [load]);
+  }, [load, loadAvailable]);
 
   const staleIds = useMemo(() => {
     const days = stale === "all" ? 0 : Number(stale);
@@ -106,6 +123,7 @@ export function SyncPage({ token }: { token: string }) {
       });
       setEdit(null);
       void load();
+      void loadAvailable();
     } catch (err) {
       setError(String(err));
     }
@@ -118,6 +136,7 @@ export function SyncPage({ token }: { token: string }) {
       await api.deleteRepo(token, deleteTarget.id);
       setDeleteTarget(null);
       void load();
+      void loadAvailable();
     } catch (err) {
       setDeleteTarget(null);
       setError(String(err));
@@ -267,6 +286,52 @@ export function SyncPage({ token }: { token: string }) {
           </TableBody>
         </Table>
       </div>
+
+      {available !== null && (
+        <div className="mt-4 rounded-lg border bg-card p-4">
+          <div className="mb-3 flex items-center gap-3">
+            <h2 className="text-sm font-semibold">{t("availableTitle")}</h2>
+            {availablePlatform && (
+              <span className="text-xs text-muted-foreground">
+                {t("availableFrom", { platform: availablePlatform })}
+              </span>
+            )}
+            <div className="flex-1" />
+            <Button variant="outline" size="sm" onClick={() => void loadAvailable()}>
+              <IconRefresh />
+              {t("refresh")}
+            </Button>
+          </div>
+          {available.length === 0 ? (
+            <p className="text-sm text-muted-foreground">{t("availableEmpty")}</p>
+          ) : (
+            <div className="space-y-1.5">
+              {available.map((r) => (
+                <div
+                  key={`${r.platform}-${r.platformId}`}
+                  className="flex items-center gap-3 rounded-md border px-3 py-2"
+                >
+                  <div className="min-w-0 flex-1 leading-tight">
+                    <div className="truncate text-sm font-medium">{r.fullName}</div>
+                    <div className="truncate text-xs text-muted-foreground">{r.cloneUrl}</div>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() =>
+                      setEdit({ id: null, name: r.name, source: r.cloneUrl, target: "" })
+                    }
+                  >
+                    <IconPlus />
+                    {t("quickAdd")}
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+          <p className="mt-3 text-xs text-muted-foreground">{t("availableHint")}</p>
+        </div>
+      )}
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />}
 

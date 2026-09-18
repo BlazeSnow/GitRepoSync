@@ -49,6 +49,7 @@ api-request-error = {$platform} API request failed: {$err}
 api-parse-error = Failed to parse {$platform} response: {$err}
 log-provider-saved = Saved {$platform} PAT
 log-provider-cleared = Cleared {$platform} PAT
+log-primary-set = Set primary account to {$platform}
 
 # ---------- Settings ----------
 base-dir-empty = Base directory must not be empty

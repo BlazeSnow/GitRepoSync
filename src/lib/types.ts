@@ -64,3 +64,14 @@ export interface OperationLog {
   operator: string;
   createdAt: number;
 }
+
+export interface AvailableRepo {
+  platform: string;
+  platformId: number;
+  name: string;
+  fullName: string;
+  cloneUrl: string;
+  sshUrl: string;
+  description: string;
+  private: boolean;
+}

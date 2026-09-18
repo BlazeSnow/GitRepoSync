@@ -14,6 +14,7 @@ const PLATFORMS: { key: ProviderPlatform; title: string }[] = [
 export function ProvidersPage({ token }: { token: string }) {
   const { t } = useTranslation();
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [primary, setPrimary] = useState<string | null>(null);
   const [pats, setPats] = useState<Record<string, string>>({ github: "", gitlab: "" });
   const [accounts, setAccounts] = useState<Record<string, AccountInfo | null>>({});
   const [loading, setLoading] = useState<Record<string, boolean>>({});
@@ -24,7 +25,20 @@ export function ProvidersPage({ token }: { token: string }) {
       .getProviders(token)
       .then(setProviders)
       .catch((e) => setMessages({ github: { text: String(e), ok: false } }));
+    api
+      .getPrimaryPlatform(token)
+      .then(setPrimary)
+      .catch(() => {});
   }, [token]);
+
+  async function handleSetPrimary(platform: ProviderPlatform) {
+    try {
+      await api.setPrimaryPlatform(token, platform);
+      setPrimary(platform);
+    } catch {
+      /* 忽略 */
+    }
+  }
 
   function infoOf(platform: string): ProviderInfo | undefined {
     return providers.find((p) => p.platform === platform);
@@ -108,10 +122,26 @@ export function ProvidersPage({ token }: { token: string }) {
                           {account.login.slice(0, 1).toUpperCase()}
                         </div>
                       )}
-                      <div className="leading-tight">
-                        <div className="text-sm font-medium">{account.name}</div>
+                      <div className="min-w-0 flex-1 leading-tight">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-sm font-medium">{account.name}</span>
+                          {primary === key && (
+                            <span className="rounded bg-success px-1.5 py-0.5 text-xs text-success-foreground">
+                              {t("primaryBadge")}
+                            </span>
+                          )}
+                        </div>
                         <div className="text-xs text-muted-foreground">{account.login}</div>
                       </div>
+                      {primary !== key && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => void handleSetPrimary(key)}
+                        >
+                          {t("setPrimary")}
+                        </Button>
+                      )}
                     </div>
                     <div>
                       <div className="mb-1.5 text-xs font-medium text-muted-foreground">

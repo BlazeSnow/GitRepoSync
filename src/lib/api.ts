@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AccountInfo,
   AppInfo,
+  AvailableRepo,
   LoginResult,
   McpConfig,
   OperationLog,
@@ -66,5 +67,14 @@ export const api = {
   },
   listLogs(token: string, limit?: number) {
     return invoke<OperationLog[]>("list_operation_logs", { token, limit: limit ?? null });
+  },
+  getPrimaryPlatform(token: string) {
+    return invoke<string | null>("get_primary_platform", { token });
+  },
+  setPrimaryPlatform(token: string, platform: string) {
+    return invoke<void>("set_primary_platform", { token, platform });
+  },
+  listAvailableRepos(token: string) {
+    return invoke<AvailableRepo[]>("list_available_repos", { token });
   },
 };

@@ -49,6 +49,7 @@ api-request-error = {$platform} API 请求失败：{$err}
 api-parse-error = 解析 {$platform} 响应失败：{$err}
 log-provider-saved = 保存 {$platform} PAT
 log-provider-cleared = 清除 {$platform} PAT
+log-primary-set = 设置主账号为 {$platform}
 
 # ---------- 设置 ----------
 base-dir-empty = 基地址不能为空

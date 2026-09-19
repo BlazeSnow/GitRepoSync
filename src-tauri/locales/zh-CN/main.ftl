@@ -69,6 +69,7 @@ log-mcp-base-dir-changed = 通过 MCP 修改仓库基地址为 {$dir}
 
 # ---------- MCP 工具描述 ----------
 tool-list-repos = 列出所有已配置的同步仓库及其最近一次同步状态
+tool-discover-repos = 扫描基地址（中转站目录）内的一级子目录，把其中的 git 仓库登记进列表：origin 远端作为源地址、其余全部远端作为备份目标；返回登记后的完整仓库列表
 tool-add-repo = 新增或更新同步仓库（按名称幂等）：同名仓库已存在时更新源地址、合并目标并重新登记，不会产生重复条目；同步时从源仓库拉取到本地基地址作为中转站（更新 LFS 与 submodule），再推送到目标仓库地址
 tool-add-repo-name = 仓库名称（同时是本地基地址下的目录名）
 tool-add-repo-source = 源地址（Git 仓库 URL）

@@ -70,6 +70,7 @@ log-mcp-base-dir-changed = Changed repository base directory to {$dir} via MCP
 
 # ---------- MCP tool descriptions ----------
 tool-list-repos = List all configured sync repositories with their latest sync status
+tool-discover-repos = Scan the first-level subdirectories of the base directory (staging directory) and register the git repositories found: the origin remote becomes the source, all other remotes become backup targets; returns the full repository list after registration
 tool-add-repo = Add or update a sync repository (idempotent by name): when a repository with the same name exists, its source is updated, targets are merged and it is re-registered instead of creating a duplicate entry; syncing pulls from the source into the local base directory as a staging copy (updating LFS and submodules), then pushes to the target repository
 tool-add-repo-name = Repository name (also the directory name under the local base directory)
 tool-add-repo-source = Source URL (Git repository URL)

@@ -169,6 +169,11 @@ fn tools_list(lang: Lang) -> Value {
                 "inputSchema": { "type": "object", "properties": {} }
             },
             {
+                "name": "discover_repos",
+                "description": tr(lang, "tool-discover-repos"),
+                "inputSchema": { "type": "object", "properties": {} }
+            },
+            {
                 "name": "add_repo",
                 "description": tr(lang, "tool-add-repo"),
                 "inputSchema": {
@@ -341,6 +346,11 @@ fn tools_call(state: &Arc<AppState>, lang: Lang, params: &Value) -> Result<Value
 
     let result: Result<Value, String> = match name {
         "list_repos" | "get_sync_status" => list_repos_value(state),
+        "discover_repos" => {
+            // 扫描基地址（中转站目录）登记新仓库：与界面加载逻辑一致，
+            // 新登记的仓库以 mcp 为操作人写入日志；返回登记后的完整列表
+            repos::discover(state, OPERATOR, lang).and_then(|()| list_repos_value(state))
+        }
         "list_logs" => {
             // 只读操作不写日志（与 list_repos 一致），避免读取行为自我刷屏
             let limit = args
@@ -937,6 +947,36 @@ mod tests {
         // 三次拒绝均未入队：同步集合与队列保持为空
         assert!(lock(&state.syncing).is_empty());
         assert!(lock(&state.sync_queue).jobs.is_empty());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// discover_repos：扫描基地址登记新仓库并返回列表，重复调用幂等
+    #[test]
+    fn discover_repos_scans_base_dir() {
+        let (state, root) = open_state();
+        // 基地址内放一个带 origin + backup 远端的 git 仓库（仅 .git/config，无需真实 git）
+        let base = root.join("base");
+        std::fs::create_dir_all(base.join("alpha/.git")).unwrap();
+        std::fs::write(
+            base.join("alpha/.git/config"),
+            "[remote \"origin\"]\n\turl = https://github.com/u/alpha.git\n\
+             [remote \"backup\"]\n\turl = https://gitlab.com/u/alpha.git\n",
+        )
+        .unwrap();
+        state.set_setting("base_dir", &base.to_string_lossy());
+
+        let repos = call(&state, "discover_repos", json!({})).unwrap();
+        let arr = repos.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["name"], json!("alpha"));
+        assert_eq!(arr[0]["source"], json!("https://github.com/u/alpha.git"));
+        let targets = arr[0]["targets"].as_array().unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0]["remote"], json!("backup"));
+
+        // 幂等：再次扫描不产生重复
+        let again = call(&state, "discover_repos", json!({})).unwrap();
+        assert_eq!(again.as_array().unwrap().len(), 1);
         std::fs::remove_dir_all(&root).ok();
     }
 }

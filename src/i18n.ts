@@ -83,6 +83,8 @@ const zh = {
   mcpColTool: "工具名",
   mcpColDesc: "说明",
   toolListRepos: "列出所有已配置的同步仓库及其最近一次同步状态",
+  toolDiscoverRepos:
+    "扫描基地址（中转站目录）内的一级子目录，把其中的 git 仓库登记进列表：origin 远端作为源地址、其余全部远端作为备份目标；返回登记后的完整仓库列表",
   toolAddRepo:
     "新增或更新同步仓库（按名称幂等）：同名仓库已存在时更新源地址、合并目标并重新登记，不会产生重复条目；同步时从源仓库拉取到本地基地址作为中转站（更新 LFS 与 submodule），再推送到目标仓库地址",
   toolUpdateRepo:
@@ -197,6 +199,8 @@ const en = {
   mcpColTool: "Tool",
   mcpColDesc: "Description",
   toolListRepos: "List all configured sync repositories with their latest sync status",
+  toolDiscoverRepos:
+    "Scan the first-level subdirectories of the base directory (staging directory) and register the git repositories found: the origin remote becomes the source, all other remotes become backup targets; returns the full repository list after registration",
   toolAddRepo:
     "Add or update a sync repository (idempotent by name): when a repository with the same name exists, its source is updated, targets are merged and it is re-registered instead of creating a duplicate entry; syncing pulls from the source into the local base directory as a staging copy (updating LFS and submodules), then pushes to the target repository",
   toolUpdateRepo:

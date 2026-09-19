@@ -1,0 +1,39 @@
+# 所有文本文件：仓库内统一 LF，检出时也使用 LF（三平台一致，符合 UTF-8 约定）
+* text=auto eol=lf
+
+# Windows 脚本需要 CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# 图片文件统一由 Git LFS 管理
+*.png filter=lfs diff=lfs merge=lfs -text
+*.jpg filter=lfs diff=lfs merge=lfs -text
+*.jpeg filter=lfs diff=lfs merge=lfs -text
+*.gif filter=lfs diff=lfs merge=lfs -text
+*.webp filter=lfs diff=lfs merge=lfs -text
+*.bmp filter=lfs diff=lfs merge=lfs -text
+*.ico filter=lfs diff=lfs merge=lfs -text
+*.icns filter=lfs diff=lfs merge=lfs -text
+
+# 其他二进制文件（禁止换行符转换与 diff）
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.eot binary
+*.zip binary
+*.gz binary
+*.wasm binary
+*.exe binary
+*.dll binary
+*.msi binary
+*.dylib binary
+*.so binary
+*.a binary
+*.lib binary
+*.dmg binary
+*.deb binary
+*.rpm binary
+*.AppImage binary

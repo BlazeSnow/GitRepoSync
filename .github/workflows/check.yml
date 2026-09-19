@@ -1,0 +1,16 @@
+name: Check
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  version-consistency:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # 合并到 main 前校验所有版本文件与 package.json 一致（version.ps1 的 CI 侧守卫）
+      - name: Check version consistency
+        shell: bash
+        run: bash ci/check-version.sh "$(node -p "require('./package.json').version")"

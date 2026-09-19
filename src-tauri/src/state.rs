@@ -352,6 +352,24 @@ pub fn attach_targets(conn: &Connection, repos: &mut [Repo]) {
 mod tests {
     use super::*;
 
+    /// ~ 开头的输入展开为完整路径，其余去空白后原样保存
+    #[test]
+    fn normalize_base_dir_expands_tilde() {
+        let home = dirs::home_dir().expect("测试环境无用户目录");
+        assert_eq!(normalize_base_dir("~"), home.to_string_lossy());
+        assert_eq!(
+            normalize_base_dir("~/repo/sub"),
+            home.join("repo/sub").to_string_lossy()
+        );
+        assert_eq!(
+            normalize_base_dir("~\\repo"),
+            home.join("repo").to_string_lossy(),
+            "Windows 风格 ~\\ 同样展开"
+        );
+        assert_eq!(normalize_base_dir("  /tmp/x  "), "/tmp/x", "去首尾空白");
+        assert_eq!(normalize_base_dir("C:\\repo"), "C:\\repo", "普通路径原样");
+    }
+
     /// 旧库同名重复行在打开时自动去重：保留可见行中最早创建的，targets 并入保留行
     #[test]
     fn duplicate_names_are_merged_on_open() {

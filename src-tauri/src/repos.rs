@@ -1211,4 +1211,69 @@ mod tests {
         assert!(d.ends_with("repo"));
         assert!(!d.starts_with('~'));
     }
+
+    /// 解析 .git/config 的远端表：多远端按出现顺序返回
+    #[test]
+    fn parse_remote_urls_reads_git_config() {
+        let root =
+            std::env::temp_dir().join(format!("grs-parse-{}", uuid::Uuid::new_v4().simple()));
+        let repo = root.join("r");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        std::fs::write(
+            repo.join(".git/config"),
+            "[core]\n\tbare = false\n\
+             [remote \"origin\"]\n\turl = https://github.com/u/r.git\n\
+             [remote \"backup\"]\n\turl = git@gitlab.com:u/r.git\n",
+        )
+        .unwrap();
+        assert_eq!(
+            parse_remote_urls(&repo).unwrap(),
+            vec![
+                ("origin".to_string(), "https://github.com/u/r.git".to_string()),
+                ("backup".to_string(), "git@gitlab.com:u/r.git".to_string()),
+            ]
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 工作树形态：.git 为文件，gitdir: 指向真实 git 目录
+    #[test]
+    fn parse_remote_urls_supports_gitfile_worktree() {
+        let root =
+            std::env::temp_dir().join(format!("grs-parse-{}", uuid::Uuid::new_v4().simple()));
+        let repo = root.join("wt");
+        let real = root.join("real.git");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::write(repo.join(".git"), format!("gitdir: {}", real.to_string_lossy())).unwrap();
+        std::fs::write(real.join("config"), "[remote \"origin\"]\n\turl = https://x/r.git\n")
+            .unwrap();
+        assert_eq!(
+            parse_remote_urls(&repo).unwrap(),
+            vec![("origin".to_string(), "https://x/r.git".to_string())]
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// .git 存在但 config 读不到：返回 None（调用方跳过，不当作“没有远端”误删目标）
+    #[test]
+    fn parse_remote_urls_none_when_config_unreadable() {
+        let root =
+            std::env::temp_dir().join(format!("grs-parse-{}", uuid::Uuid::new_v4().simple()));
+        let repo = root.join("broken");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        assert_eq!(parse_remote_urls(&repo), None);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 非 git 目录返回空列表（而非 None）
+    #[test]
+    fn parse_remote_urls_empty_without_git() {
+        let root =
+            std::env::temp_dir().join(format!("grs-parse-{}", uuid::Uuid::new_v4().simple()));
+        let repo = root.join("plain");
+        std::fs::create_dir_all(&repo).unwrap();
+        assert_eq!(parse_remote_urls(&repo), Some(Vec::new()));
+        std::fs::remove_dir_all(&root).ok();
+    }
 }

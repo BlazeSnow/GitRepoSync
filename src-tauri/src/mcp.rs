@@ -823,4 +823,63 @@ mod tests {
         assert!(!clamped.as_array().unwrap().is_empty());
         std::fs::remove_dir_all(&root).ok();
     }
+
+    /// 协议层：通知不应答、鉴权拦截、解析错误、initialize 版本与语言切换、未知方法、ping
+    #[test]
+    fn handle_line_protocol_behaviour() {
+        let (state, root) = open_state();
+        let mut lang = Lang::Zh;
+        // 通知类消息不应答
+        assert_eq!(
+            handle_line(
+                &state,
+                true,
+                &mut lang,
+                r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#
+            ),
+            None
+        );
+        // 鉴权未通过：所有请求被拒
+        let resp = handle_line(
+            &state,
+            false,
+            &mut lang,
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
+        )
+        .unwrap();
+        assert!(resp.contains("-32001"));
+        // 解析错误
+        let resp = handle_line(&state, true, &mut lang, "not-json").unwrap();
+        assert!(resp.contains("-32700"));
+        // initialize：返回协议版本，locale 切换会话语言
+        let resp = handle_line(
+            &state,
+            true,
+            &mut lang,
+            r#"{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"locale":"en-US"}}"#,
+        )
+        .unwrap();
+        assert!(resp.contains("protocolVersion"));
+        assert_eq!(lang, Lang::En);
+        // 会话语言影响后续消息（method not found 为英文文案）
+        let resp = handle_line(
+            &state,
+            true,
+            &mut lang,
+            r#"{"jsonrpc":"2.0","id":3,"method":"nope"}"#,
+        )
+        .unwrap();
+        assert!(resp.contains("-32601"));
+        assert!(resp.contains("method not found"));
+        // ping 应答 result
+        let resp = handle_line(
+            &state,
+            true,
+            &mut lang,
+            r#"{"jsonrpc":"2.0","id":4,"method":"ping"}"#,
+        )
+        .unwrap();
+        assert!(resp.contains("\"result\""));
+        std::fs::remove_dir_all(&root).ok();
+    }
 }

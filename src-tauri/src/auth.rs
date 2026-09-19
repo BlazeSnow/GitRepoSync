@@ -138,4 +138,44 @@ mod tests {
             "8ebeceffd4c60f2e15bb5bda22116ab3b6cebdee20f39422be7ccfacddceada2"
         );
     }
+
+    /// 会话校验：过期会话被拒绝并顺手清理，有效会话返回用户名
+    #[test]
+    fn require_session_expires_and_cleans_up() {
+        use crate::state::AppState;
+
+        let root =
+            std::env::temp_dir().join(format!("grs-auth-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&root).unwrap();
+        let state = AppState::open(root.join("app.db")).unwrap();
+        let now = Utc::now().timestamp();
+        {
+            let conn = lock(&state.conn);
+            conn.execute(
+                "INSERT INTO sessions (token, username, expires_at) VALUES ('expired', 'admin', ?1)",
+                params![now - 10],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO sessions (token, username, expires_at) VALUES ('valid', 'admin', ?1)",
+                params![now + 3600],
+            )
+            .unwrap();
+        }
+        assert!(require_session(&state, "expired").is_err(), "过期会话被拒绝");
+        let remaining: i64 = {
+            let conn = lock(&state.conn);
+            conn.query_row(
+                "SELECT COUNT(*) FROM sessions WHERE token = 'expired'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(remaining, 0, "过期会话被顺手清理");
+        assert_eq!(require_session(&state, "valid").unwrap(), "admin");
+        assert!(require_session(&state, "nope").is_err(), "未知令牌被拒绝");
+        drop(state);
+        std::fs::remove_dir_all(&root).ok();
+    }
 }

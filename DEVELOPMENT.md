@@ -10,21 +10,21 @@ Git Repo Sync 是一款跨平台的 Git 仓库同步桌面软件，用于将仓�
 
 ## 2. 技术栈
 
-| 层级 | 技术 |
-| --- | --- |
-| 桌面框架 | Tauri 2 |
-| 后端 | Rust |
-| 前端 UI | shadcn/ui（React + TypeScript + Tailwind CSS），i18n 采用 react-i18next |
-| 数据库 | SQLite（rusqlite bundled，WAL 模式） |
-| 打包发布 | GitHub Actions → GitHub Releases（支持 beta 版本） |
+| 层级     | 技术                                                                    |
+| -------- | ----------------------------------------------------------------------- |
+| 桌面框架 | Tauri 2                                                                 |
+| 后端     | Rust                                                                    |
+| 前端 UI  | shadcn/ui（React + TypeScript + Tailwind CSS），i18n 采用 react-i18next |
+| 数据库   | SQLite（rusqlite bundled，WAL 模式）                                    |
+| 打包发布 | GitHub Actions → GitHub Releases（支持 beta 版本）                      |
 
 ## 3. 文档索引
 
-| 文档 | 内容 |
-| --- | --- |
+| 文档                                          | 内容                                                                       |
+| --------------------------------------------- | -------------------------------------------------------------------------- |
 | [environment.md](./references/environment.md) | 环境准备与常用命令：基础依赖、各平台系统依赖、终端编码（GBK 与 UTF-8）处理 |
-| [features.md](./references/features.md) | 功能设计：用户登录、同步仓库、日志、MCP、设置、多语言 |
-| [release.md](./references/release.md) | 版本号规则与发布流程：version.ps1 / tag.ps1、GitHub Releases、beta 版本 |
+| [features.md](./references/features.md)       | 功能设计：用户登录、同步仓库、日志、MCP、设置、多语言                      |
+| [release.md](./references/release.md)         | 版本号规则与发布流程：version.ps1 / tag.ps1、GitHub Releases、beta 版本    |
 
 ## 4. 快速开始
 
@@ -51,6 +51,7 @@ pnpm tauri build        # 构建发布版安装包
 ├── ci/                  # CI 辅助脚本（版本一致性校验、Linux 依赖）
 ├── AGENTS.md            # 开发/Agent 约定（禁止修改）
 ├── CHANGELOG.md         # 变更记录（每完成一项功能后更新）
+├── README.md            # 面向用户的项目说明（下载、上手、MCP 接入、FAQ）
 ├── DEVELOPMENT.md       # 开发文档主入口
 ├── version.ps1          # 版本号同步（package.json → tauri.conf / Cargo）
 ├── tag.ps1              # 版本一致性检查 + 打 tag 发布

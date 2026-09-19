@@ -36,6 +36,9 @@ import { IconPlus, IconRefresh, IconSquare, IconX } from "@/components/icons";
 
 const STALE_DAYS = [1, 3, 7, 30];
 
+/** 只有 origin（没有任何备份目标）或连源地址都没有的仓库视为未配置，不参与同步 */
+const isUnconfigured = (r: Repo) => !r.source || r.targets.length === 0;
+
 export function SyncPage({ token }: { token: string }) {
   const { t } = useTranslation();
   const [repos, setRepos] = useState<Repo[]>([]);
@@ -104,11 +107,9 @@ export function SyncPage({ token }: { token: string }) {
 
   const staleIds = useMemo(() => {
     const days = stale === "all" ? 0 : Number(stale);
-    if (days === 0) return repos.map((r) => r.id);
-    const threshold = Date.now() - days * 86400_000;
-    return repos
-      .filter((r) => r.lastSynced === null || r.lastSynced < threshold)
-      .map((r) => r.id);
+    const inRange = (r: Repo) =>
+      days === 0 || r.lastSynced === null || r.lastSynced < Date.now() - days * 86400_000;
+    return repos.filter((r) => !isUnconfigured(r) && inRange(r)).map((r) => r.id);
   }, [repos, stale]);
 
   async function handleStartSync() {
@@ -285,12 +286,16 @@ export function SyncPage({ token }: { token: string }) {
                     <TableCell className="font-medium">{repo.name}</TableCell>
                     <TableCell>{remoteCell(repo)}</TableCell>
                     <TableCell>
-                      <Badge
-                        variant={badge.variant}
-                        className={repo.lastStatus === "running" ? "animate-pulse" : ""}
-                      >
-                        {badge.label}
-                      </Badge>
+                      {isUnconfigured(repo) ? (
+                        <Badge variant="secondary">{t("notConfigured")}</Badge>
+                      ) : (
+                        <Badge
+                          variant={badge.variant}
+                          className={repo.lastStatus === "running" ? "animate-pulse" : ""}
+                        >
+                          {badge.label}
+                        </Badge>
+                      )}
                     </TableCell>
                     <TableCell className="text-muted-foreground">
                       {relativeTime(repo.lastSynced)}

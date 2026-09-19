@@ -337,18 +337,39 @@ fn tools_call(state: &Arc<AppState>, lang: Lang, params: &Value) -> Result<Value
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            let exists = {
+            let (exists, source, target_n) = {
                 let conn = lock(&state.conn);
-                conn.query_row(
-                    "SELECT COUNT(*) FROM repos WHERE id = ?1",
-                    params![id],
-                    |r| r.get::<_, i64>(0),
-                )
-                .map_err(|e| (-32602, e.to_string()))?
-                    > 0
+                let source: String = conn
+                    .query_row(
+                        "SELECT source FROM repos WHERE id = ?1",
+                        params![id],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or_default();
+                let n: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM sync_targets WHERE repo_id = ?1",
+                        params![id],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0);
+                let exists: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM repos WHERE id = ?1",
+                        params![id],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0);
+                (exists > 0, source, n)
             };
             if !exists {
                 return Err((-32602, tr(lang, "repo-not-found")));
+            }
+            if source.is_empty() {
+                return Err((-32602, tr(lang, "sync-no-source")));
+            }
+            if target_n == 0 {
+                return Err((-32602, tr(lang, "sync-no-targets")));
             }
             let started = repos::spawn_sync(state.clone(), None, id, OPERATOR.to_string(), lang);
             state.add_log(&tr(lang, "log-mcp-sync"), OPERATOR);

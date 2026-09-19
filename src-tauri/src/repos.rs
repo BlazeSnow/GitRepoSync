@@ -201,6 +201,28 @@ pub fn start_sync(
     let lang = gui_lang();
     let mut started = 0;
     for id in ids {
+        // 未配置（缺源地址或备份目标）的仓库不参与同步，避免必然的“失败”
+        let configured = {
+            let conn = lock(&state.conn);
+            let src: String = conn
+                .query_row(
+                    "SELECT source FROM repos WHERE id = ?1",
+                    params![id],
+                    |r| r.get(0),
+                )
+                .unwrap_or_default();
+            let n: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sync_targets WHERE repo_id = ?1",
+                    params![id],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            !src.is_empty() && n > 0
+        };
+        if !configured {
+            continue;
+        }
         if spawn_sync(
             state.inner().clone(),
             Some(app.clone()),

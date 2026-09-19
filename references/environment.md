@@ -59,6 +59,14 @@ pnpm tauri build        # 构建发布版安装包
 
 # 在 src-tauri 目录下：
 cargo check             # 快速检查 Rust 代码
+cargo test              # 后端单元测试
 cargo fmt               # Rust 代码格式化
 cargo clippy            # Rust 静态检查
+```
+
+前端测试（仓库根目录）：
+
+```bash
+pnpm test               # 运行 vitest 单元测试（单次）
+pnpm test:watch         # 监听模式
 ```

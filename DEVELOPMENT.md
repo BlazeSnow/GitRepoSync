@@ -42,6 +42,13 @@ pnpm tauri dev          # 以开发模式启动（前端热重载 + Rust 增量�
 pnpm tauri build        # 构建发布版安装包
 ```
 
+测试命令（PR 检查会运行同一套）：
+
+```bash
+pnpm test                                # 前端单元测试（vitest）
+cd src-tauri && cargo test               # 后端单元测试
+```
+
 环境搭建与更多命令见 [references/environment.md](./references/environment.md)。
 
 ## 5. 项目结构

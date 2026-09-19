@@ -21,6 +21,10 @@ pub fn run_stdio(state: Arc<AppState>, provided_key: Option<String>) {
             && provided_key.as_deref() == Some(expected.as_str())
     };
     let mut session_lang = Lang::from_env();
+    eprintln!(
+        "[mcp] stdio 服务已启动（APIKEY 鉴权{}）",
+        if authorized { "通过" } else { "未通过" }
+    );
     let stdin = std::io::stdin();
     let mut out = std::io::stdout().lock();
     loop {
@@ -45,8 +49,49 @@ pub fn run_stdio(state: Arc<AppState>, provided_key: Option<String>) {
     }
 }
 
-/// 返回 None 表示无需应答（通知类消息）
+/// 返回 None 表示无需应答（通知类消息）。
+/// 外层：单请求 panic 隔离（应答内部错误、进程存活）与 stderr 诊断日志——
+/// stdio 模式下 stderr 不参与协议，客户端可见，用于排查断连类问题。
 fn handle_line(
+    state: &Arc<AppState>,
+    authorized: bool,
+    session_lang: &mut Lang,
+    line: &str,
+) -> Option<String> {
+    // 通知类消息不应答、不计入诊断日志
+    let method = serde_json::from_str::<Value>(line)
+        .ok()
+        .and_then(|v| v.get("method").and_then(|m| m.as_str()).map(str::to_string));
+    if method.as_deref().is_some_and(|m| m.starts_with("notifications/")) {
+        return handle_line_inner(state, authorized, session_lang, line);
+    }
+    let started = std::time::Instant::now();
+    let response = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        handle_line_inner(state, authorized, session_lang, line)
+    }))
+    .unwrap_or_else(|p| {
+        let msg = if let Some(s) = p.downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = p.downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "unknown panic".to_string()
+        };
+        eprintln!("[mcp] 请求处理 panic：{msg}");
+        Some(
+            rpc_error(&Value::Null, -32603, &tr(*session_lang, "mcp-internal-error"))
+                .to_string(),
+        )
+    });
+    eprintln!(
+        "[mcp] {}（{} ms）",
+        method.as_deref().unwrap_or("?"),
+        started.elapsed().as_millis()
+    );
+    response
+}
+
+fn handle_line_inner(
     state: &Arc<AppState>,
     authorized: bool,
     session_lang: &mut Lang,
@@ -148,6 +193,30 @@ fn tools_list(lang: Lang) -> Value {
                 }
             },
             {
+                "name": "update_repo",
+                "description": tr(lang, "tool-update-repo"),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string", "description": tr(lang, "tool-update-repo-id") },
+                        "name": { "type": "string", "description": tr(lang, "tool-update-repo-name") },
+                        "source": { "type": "string", "description": tr(lang, "tool-update-repo-source") },
+                        "targets": {
+                            "type": "array",
+                            "description": tr(lang, "tool-update-repo-targets"),
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "remote": { "type": "string" },
+                                    "url": { "type": "string" }
+                                }
+                            }
+                        }
+                    },
+                    "required": ["id"]
+                }
+            },
+            {
                 "name": "remove_repo",
                 "description": tr(lang, "tool-remove-repo"),
                 "inputSchema": {
@@ -218,6 +287,20 @@ fn list_repos_value(state: &AppState) -> Result<Value, String> {
     serde_json::to_value(repos).map_err(|e| e.to_string())
 }
 
+/// 按 id 读取完整仓库（含目标状态）并序列化；供 add / update 工具响应复用
+fn repo_value_by_id(state: &AppState, id: &str, lang: Lang) -> Result<Value, String> {
+    let conn = lock(&state.conn);
+    let mut repo = conn
+        .query_row(
+            &format!("SELECT {REPO_COLS} FROM repos WHERE id = ?1"),
+            params![id],
+            repo_from_row,
+        )
+        .map_err(|_| tr(lang, "repo-not-found"))?;
+    crate::state::attach_targets(&conn, std::slice::from_mut(&mut repo));
+    serde_json::to_value(repo).map_err(|e| e.to_string())
+}
+
 fn tools_call(state: &Arc<AppState>, lang: Lang, params: &Value) -> Result<Value, (i64, String)> {
     let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
     let args = params.get("arguments").cloned().unwrap_or(json!({}));
@@ -261,53 +344,64 @@ fn tools_call(state: &Arc<AppState>, lang: Lang, params: &Value) -> Result<Value
             if targets.is_empty() {
                 return Err((-32602, tr(lang, "sync-no-targets")));
             }
-            let mut repo = Repo {
-                id: Uuid::new_v4().to_string(),
-                name: rname.clone(),
-                source,
-                last_synced: None,
-                last_status: "idle".into(),
-                last_message: None,
-                targets: Vec::new(),
-            };
-            {
+            // 幂等：同名仓库已存在（含隐藏的）时更新源地址、合并目标并重新登记，
+            // 不再创建重复条目——name 同时是中转目录名与自动发现的身份
+            let existing: Option<String> = {
                 let conn = lock(&state.conn);
-                conn.execute(
-                    "INSERT INTO repos (id, name, source, target, last_synced, last_status, last_message)
-                     VALUES (?1, ?2, ?3, '', ?4, ?5, ?6)",
-                    params![
-                        repo.id,
-                        repo.name,
-                        repo.source,
-                        repo.last_synced,
-                        repo.last_status,
-                        repo.last_message
-                    ],
+                conn.query_row(
+                    "SELECT id FROM repos WHERE name = ?1",
+                    params![rname],
+                    |r| r.get::<_, String>(0),
                 )
-                .map_err(|e| (-32602, e.to_string()))?;
-                for (remote, url) in &targets {
+                .ok()
+            };
+            let created = existing.is_none();
+            let repo_id = match existing {
+                Some(id) => {
+                    let conn = lock(&state.conn);
                     conn.execute(
-                        "INSERT INTO sync_targets (repo_id, remote, url) VALUES (?1, ?2, ?3)",
-                        params![repo.id, remote, url],
+                        "UPDATE repos SET source = ?1, hidden = 0 WHERE id = ?2",
+                        params![source, id],
                     )
                     .map_err(|e| (-32602, e.to_string()))?;
+                    for (remote, url) in &targets {
+                        conn.execute(
+                            "INSERT INTO sync_targets (repo_id, remote, url) VALUES (?1, ?2, ?3)
+                             ON CONFLICT(repo_id, remote) DO UPDATE SET url = excluded.url",
+                            params![id, remote, url],
+                        )
+                        .map_err(|e| (-32602, e.to_string()))?;
+                    }
+                    id
                 }
-            }
-            repo.targets = targets
-                .iter()
-                .map(|(remote, url)| crate::state::TargetState {
-                    remote: remote.clone(),
-                    url: url.clone(),
-                    last_status: "idle".into(),
-                    last_message: None,
-                    last_synced: None,
-                })
-                .collect();
+                None => {
+                    let id = Uuid::new_v4().to_string();
+                    let conn = lock(&state.conn);
+                    conn.execute(
+                        "INSERT INTO repos (id, name, source, target, last_synced, last_status, last_message)
+                         VALUES (?1, ?2, ?3, '', ?4, ?5, ?6)",
+                        params![id, rname, source, None::<i64>, "idle", None::<String>],
+                    )
+                    .map_err(|e| (-32602, e.to_string()))?;
+                    for (remote, url) in &targets {
+                        conn.execute(
+                            "INSERT INTO sync_targets (repo_id, remote, url) VALUES (?1, ?2, ?3)",
+                            params![id, remote, url],
+                        )
+                        .map_err(|e| (-32602, e.to_string()))?;
+                    }
+                    id
+                }
+            };
             state.add_log(
                 &tr_a(lang, "log-mcp-repo-added", &[("name", &rname)]),
                 OPERATOR,
             );
-            serde_json::to_value(repo).map_err(|e| e.to_string())
+            let mut value = repo_value_by_id(state, &repo_id, lang).map_err(|e| (-32602, e))?;
+            if let Some(obj) = value.as_object_mut() {
+                obj.insert("created".into(), Value::Bool(created));
+            }
+            Ok(value)
         }
         "remove_repo" => {
             let id = args
@@ -318,18 +412,110 @@ fn tools_call(state: &Arc<AppState>, lang: Lang, params: &Value) -> Result<Value
             if lock(&state.syncing).contains(&id) {
                 return Err((-32602, tr(lang, "repo-syncing")));
             }
-            let deleted = {
+            // 存在性按 repos 行本身判定：自动发现的仓库可能没有目标，
+            // sync_targets 的删除行数不能作为判定（曾把“无目标仓库”误报为不存在）。
+            // 移除 = 软删除：隐藏并清空目标；基地址内目录不删除、不会被自动发现重新登记，
+            // 与界面删除语义一致
+            let name = {
                 let conn = lock(&state.conn);
+                let name: String = conn
+                    .query_row("SELECT name FROM repos WHERE id = ?1", params![id], |r| r.get(0))
+                    .map_err(|_| (-32602, tr(lang, "repo-not-found")))?;
                 conn.execute("UPDATE repos SET hidden = 1 WHERE id = ?1", params![id])
                     .map_err(|e| (-32602, e.to_string()))?;
                 conn.execute("DELETE FROM sync_targets WHERE repo_id = ?1", params![id])
-                    .map_err(|e| (-32602, e.to_string()))?
+                    .map_err(|e| (-32602, e.to_string()))?;
+                name
             };
-            if deleted == 0 {
-                return Err((-32602, tr(lang, "repo-not-found")));
+            state.add_log(
+                &tr_a(lang, "log-mcp-repo-deleted", &[("name", &name)]),
+                OPERATOR,
+            );
+            Ok(json!({ "deleted": true, "id": id, "name": name }))
+        }
+        "update_repo" => {
+            let id = args
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if lock(&state.syncing).contains(&id) {
+                return Err((-32602, tr(lang, "repo-syncing")));
             }
-            state.add_log(&tr(lang, "log-mcp-repo-deleted"), OPERATOR);
-            Ok(json!({ "deleted": true }))
+            let optional_field = |k: &str| {
+                args.get(k)
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+            };
+            let name = optional_field("name");
+            let source = optional_field("source");
+            // targets 提供即整体替换（与界面编辑一致）；仅补充目标请用 add_repo（合并语义）
+            let targets: Option<Vec<(String, String)>> = args
+                .get("targets")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|t| {
+                            let remote = t.get("remote")?.as_str()?.trim().to_string();
+                            let url = t.get("url")?.as_str()?.trim().to_string();
+                            (!remote.is_empty() && !url.is_empty()).then_some((remote, url))
+                        })
+                        .collect()
+                });
+            if let Some(ts) = &targets {
+                if ts.is_empty() {
+                    return Err((-32602, tr(lang, "sync-no-targets")));
+                }
+            }
+            if name.is_none() && source.is_none() && targets.is_none() {
+                return Err((-32602, tr(lang, "update-repo-no-fields")));
+            }
+            let log_name = {
+                let conn = lock(&state.conn);
+                let current_name: String = conn
+                    .query_row("SELECT name FROM repos WHERE id = ?1", params![id], |r| {
+                        r.get(0)
+                    })
+                    .map_err(|_| (-32602, tr(lang, "repo-not-found")))?;
+                // 改名禁止与现有名称冲突（name 唯一，且是自动发现的身份）
+                if let Some(n) = &name {
+                    let dup: i64 = conn
+                        .query_row(
+                            "SELECT COUNT(*) FROM repos WHERE name = ?1 AND id != ?2",
+                            params![n, id],
+                            |r| r.get(0),
+                        )
+                        .unwrap_or(0);
+                    if dup > 0 {
+                        return Err((-32602, tr_a(lang, "repo-name-exists", &[("name", n)])));
+                    }
+                    conn.execute("UPDATE repos SET name = ?1 WHERE id = ?2", params![n, id])
+                        .map_err(|e| (-32602, e.to_string()))?;
+                }
+                if let Some(s) = &source {
+                    conn.execute("UPDATE repos SET source = ?1 WHERE id = ?2", params![s, id])
+                        .map_err(|e| (-32602, e.to_string()))?;
+                }
+                if let Some(ts) = &targets {
+                    conn.execute("DELETE FROM sync_targets WHERE repo_id = ?1", params![id])
+                        .map_err(|e| (-32602, e.to_string()))?;
+                    for (remote, url) in ts {
+                        conn.execute(
+                            "INSERT INTO sync_targets (repo_id, remote, url) VALUES (?1, ?2, ?3)",
+                            params![id, remote, url],
+                        )
+                        .map_err(|e| (-32602, e.to_string()))?;
+                    }
+                }
+                name.unwrap_or(current_name)
+            };
+            state.add_log(
+                &tr_a(lang, "log-mcp-repo-updated", &[("name", &log_name)]),
+                OPERATOR,
+            );
+            repo_value_by_id(state, &id, lang)
         }
         "sync_repo" => {
             let id = args
@@ -413,5 +599,157 @@ fn tools_call(state: &Arc<AppState>, lang: Lang, params: &Value) -> Result<Value
             "content": [ { "type": "text", "text": e } ],
             "isError": true
         })),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lang::Lang;
+    use crate::state::AppState;
+
+    fn open_state() -> (Arc<AppState>, std::path::PathBuf) {
+        let root =
+            std::env::temp_dir().join(format!("grs-mcp-test-{}", Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&root).unwrap();
+        (
+            Arc::new(AppState::open(root.join("app.db")).unwrap()),
+            root,
+        )
+    }
+
+    fn call(state: &Arc<AppState>, tool: &str, args: Value) -> Result<Value, (i64, String)> {
+        // tools_call 的 Ok 是 { content: [{text}], isError } 信封：解开为原始值 / Err
+        let envelope = tools_call(state, Lang::Zh, &json!({ "name": tool, "arguments": args }))?;
+        let is_error = envelope["isError"].as_bool().unwrap_or(false);
+        let text = envelope["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        if is_error {
+            return Err((-32602, text));
+        }
+        serde_json::from_str(&text).map_err(|e| (-32603, e.to_string()))
+    }
+
+    fn count(state: &AppState, sql: &str, id: &str) -> i64 {
+        let conn = lock(&state.conn);
+        conn.query_row(sql, params![id], |r| r.get(0)).unwrap()
+    }
+
+    /// 同名 add_repo 幂等：更新源地址、按 remote 合并目标，不产生重复条目
+    #[test]
+    fn add_repo_is_idempotent_by_name() {
+        let (state, root) = open_state();
+        let first = call(
+            &state,
+            "add_repo",
+            json!({
+                "name": "demo", "source": "https://src/demo.git",
+                "targets": [{ "remote": "backup", "url": "https://bak/demo.git" }]
+            }),
+        )
+        .unwrap();
+        assert_eq!(first["created"], json!(true));
+        let second = call(
+            &state,
+            "add_repo",
+            json!({
+                "name": "demo", "source": "https://src2/demo.git",
+                "targets": [{ "remote": "gitlab", "url": "https://gl/demo.git" }]
+            }),
+        )
+        .unwrap();
+        assert_eq!(second["created"], json!(false));
+        assert_eq!(second["id"], first["id"], "同名 add_repo 返回同一条目");
+        assert_eq!(second["source"], json!("https://src2/demo.git"));
+        assert_eq!(
+            count(&state, "SELECT COUNT(*) FROM repos WHERE name = ?1", "demo"),
+            1
+        );
+        let id = second["id"].as_str().unwrap();
+        assert_eq!(
+            count(&state, "SELECT COUNT(*) FROM sync_targets WHERE repo_id = ?1", id),
+            2,
+            "目标按 remote 合并：backup + gitlab"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 无目标仓库（自动发现形态）删除必须成功：曾按 sync_targets 删除行数判定而误报不存在
+    #[test]
+    fn remove_repo_succeeds_without_targets() {
+        let (state, root) = open_state();
+        let added = call(
+            &state,
+            "add_repo",
+            json!({
+                "name": "solo", "source": "https://src/solo.git",
+                "targets": [{ "remote": "backup", "url": "https://bak/solo.git" }]
+            }),
+        )
+        .unwrap();
+        let id = added["id"].as_str().unwrap().to_string();
+        {
+            let conn = lock(&state.conn);
+            conn.execute("DELETE FROM sync_targets WHERE repo_id = ?1", params![id])
+                .unwrap();
+        }
+        let removed = call(&state, "remove_repo", json!({ "id": id })).unwrap();
+        assert_eq!(removed["deleted"], json!(true));
+        assert_eq!(removed["name"], json!("solo"));
+        let hidden: i64 = {
+            let conn = lock(&state.conn);
+            conn.query_row("SELECT hidden FROM repos WHERE id = ?1", params![removed["id"].as_str().unwrap()], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(hidden, 1, "移除为软删除（隐藏）");
+        // 不存在的 id 报“仓库不存在”
+        assert_eq!(
+            call(&state, "remove_repo", json!({ "id": "nope" })).unwrap_err().0,
+            -32602
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// update_repo：targets 提供即整体替换，支持改名；空 targets 与空参数拒绝
+    #[test]
+    fn update_repo_replaces_targets_and_renames() {
+        let (state, root) = open_state();
+        let added = call(
+            &state,
+            "add_repo",
+            json!({
+                "name": "old", "source": "https://src/old.git",
+                "targets": [
+                    { "remote": "a", "url": "https://a/old.git" },
+                    { "remote": "b", "url": "https://b/old.git" }
+                ]
+            }),
+        )
+        .unwrap();
+        let id = added["id"].as_str().unwrap();
+        let updated = call(
+            &state,
+            "update_repo",
+            json!({
+                "id": id, "name": "new",
+                "targets": [{ "remote": "c", "url": "https://c/new.git" }]
+            }),
+        )
+        .unwrap();
+        assert_eq!(updated["name"], json!("new"));
+        let targets = updated["targets"].as_array().unwrap();
+        assert_eq!(targets.len(), 1, "targets 提供即整体替换");
+        assert_eq!(targets[0]["remote"], json!("c"));
+        assert!(call(&state, "update_repo", json!({ "id": id, "targets": [] })).is_err());
+        assert!(call(&state, "update_repo", json!({ "id": id })).is_err());
+        assert_eq!(
+            call(&state, "update_repo", json!({ "id": "nope", "source": "s" }))
+                .unwrap_err()
+                .0,
+            -32602
+        );
+        std::fs::remove_dir_all(&root).ok();
     }
 }

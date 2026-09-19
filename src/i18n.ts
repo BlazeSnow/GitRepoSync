@@ -84,8 +84,11 @@ const zh = {
   mcpColDesc: "说明",
   toolListRepos: "列出所有已配置的同步仓库及其最近一次同步状态",
   toolAddRepo:
-    "新增一个同步仓库：从源仓库拉取到本地基地址作为中转站（更新 LFS 与 submodule），再推送到目标仓库地址",
-  toolRemoveRepo: "删除指定的同步仓库",
+    "新增或更新同步仓库（按名称幂等）：同名仓库已存在时更新源地址、合并目标并重新登记，不会产生重复条目；同步时从源仓库拉取到本地基地址作为中转站（更新 LFS 与 submodule），再推送到目标仓库地址",
+  toolUpdateRepo:
+    "更新指定同步仓库的配置：可修改名称与源地址；提供 targets 时整体替换目标列表（仅补充目标请用 add_repo，其为合并语义）",
+  toolRemoveRepo:
+    "移除指定同步仓库（软删除）：从列表隐藏并清空其目标配置；基地址内目录不被删除，也不会被自动发现重新登记",
   toolSyncRepo: "立即开始同步指定仓库（异步执行）",
   toolGetSyncStatus: "查询所有仓库的最近同步状态",
   toolGetBaseDir: "查询本地仓库基地址（中转站目录）",
@@ -194,8 +197,11 @@ const en = {
   mcpColDesc: "Description",
   toolListRepos: "List all configured sync repositories with their latest sync status",
   toolAddRepo:
-    "Add a sync repository: pull from the source into the local base directory as a staging copy (updating LFS and submodules), then push to the target repository",
-  toolRemoveRepo: "Delete the specified sync repository",
+    "Add or update a sync repository (idempotent by name): when a repository with the same name exists, its source is updated, targets are merged and it is re-registered instead of creating a duplicate entry; syncing pulls from the source into the local base directory as a staging copy (updating LFS and submodules), then pushes to the target repository",
+  toolUpdateRepo:
+    "Update the configuration of the specified sync repository: rename and change the source URL; when targets is provided it fully replaces the target list (to only add targets use add_repo, which merges)",
+  toolRemoveRepo:
+    "Remove the specified sync repository (soft delete): it is hidden from the list and its targets are cleared; the directory under the base directory is not deleted and the repository will not be re-discovered",
   toolSyncRepo: "Start syncing the specified repository immediately (async)",
   toolGetSyncStatus: "Query the latest sync status of all repositories",
   toolGetBaseDir: "Query the local repository base directory (staging directory)",

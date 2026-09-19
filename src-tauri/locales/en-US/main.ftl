@@ -18,6 +18,7 @@ log-change-password = Changed password
 
 # ---------- Repositories ----------
 repo-fields-empty = Repository name, source and target must not be empty
+repo-name-exists = Repository name "{$name}" already exists
 repo-not-found = Repository not found
 repo-syncing = This repository is syncing; stop it first
 log-repo-added = Added repository "{$name}"
@@ -59,19 +60,26 @@ mcp-unauthorized = unauthorized: incorrect API key
 mcp-parse-error = parse error
 mcp-method-not-found = method not found: {$method}
 mcp-unknown-tool = unknown tool: {$tool}
+mcp-internal-error = Internal error while handling the request
 mcp-spawn-internal = Internal error
 log-mcp-repo-added = Added repository "{$name}" via MCP
-log-mcp-repo-deleted = Deleted a repository via MCP
+log-mcp-repo-updated = Updated repository "{$name}" via MCP
+log-mcp-repo-deleted = Removed repository "{$name}" via MCP
 log-mcp-sync = Triggered sync via MCP
 log-mcp-base-dir-changed = Changed repository base directory to {$dir} via MCP
 
 # ---------- MCP tool descriptions ----------
 tool-list-repos = List all configured sync repositories with their latest sync status
-tool-add-repo = Add a sync repository: pull from the source into the local base directory as a staging copy (updating LFS and submodules), then push to the target repository
+tool-add-repo = Add or update a sync repository (idempotent by name): when a repository with the same name exists, its source is updated, targets are merged and it is re-registered instead of creating a duplicate entry; syncing pulls from the source into the local base directory as a staging copy (updating LFS and submodules), then pushes to the target repository
 tool-add-repo-name = Repository name (also the directory name under the local base directory)
 tool-add-repo-source = Source URL (Git repository URL)
-tool-add-repo-target = Target repository URL (Git repository URL)
-tool-remove-repo = Delete the specified sync repository
+tool-add-repo-target = Target repository URL (Git repository URL; shorthand for a single targets entry)
+tool-update-repo = Update the configuration of the specified sync repository: rename and change the source URL; when targets is provided it fully replaces the target list (to only add targets use add_repo, which merges)
+tool-update-repo-id = Repository ID
+tool-update-repo-name = New repository name (optional)
+tool-update-repo-source = New source URL (optional)
+tool-update-repo-targets = Full backup target list (optional; replaces all existing targets when provided)
+tool-remove-repo = Remove the specified sync repository (soft delete): it is hidden from the list and its targets are cleared; the directory under the base directory is not deleted and the repository will not be re-discovered
 tool-remove-repo-id = Repository ID
 tool-sync-repo = Start syncing the specified repository immediately (async; use get_sync_status to check progress)
 tool-sync-repo-id = Repository ID

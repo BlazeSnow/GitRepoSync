@@ -22,10 +22,23 @@ pub struct Repo {
     pub id: String,
     pub name: String,
     pub source: String,
-    pub target: String,
     pub last_synced: Option<i64>,
     pub last_status: String,
     pub last_message: Option<String>,
+    /// 备份目标（除 origin 外的全部远端），1 对多
+    #[serde(default)]
+    pub targets: Vec<TargetState>,
+}
+
+/// 一个备份目标的状态（按远端名独立记录）
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetState {
+    pub remote: String,
+    pub url: String,
+    pub last_status: String,
+    pub last_message: Option<String>,
+    pub last_synced: Option<i64>,
 }
 
 /// 操作日志条目（软件全部操作入库 sqlite）
@@ -123,11 +136,21 @@ impl AppState {
                 username   TEXT NOT NULL,
                 expires_at INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS sync_targets (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_id      TEXT NOT NULL,
+                remote       TEXT NOT NULL,
+                url          TEXT NOT NULL,
+                last_synced  INTEGER,
+                last_status  TEXT NOT NULL DEFAULT 'idle',
+                last_message TEXT,
+                UNIQUE(repo_id, remote)
+            );
             CREATE TABLE IF NOT EXISTS repos (
                 id           TEXT PRIMARY KEY,
                 name         TEXT NOT NULL,
                 source       TEXT NOT NULL,
-                target       TEXT NOT NULL,
+                target       TEXT NOT NULL DEFAULT '',
                 last_synced  INTEGER,
                 last_status  TEXT NOT NULL DEFAULT 'idle',
                 last_message TEXT,
@@ -147,6 +170,13 @@ impl AppState {
         .expect("初始化数据库表失败");
         // 旧库升级：repos 表补 hidden 列（已存在时忽略错误）
         let _ = conn.execute("ALTER TABLE repos ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0", []);
+        // 旧库升级：单目标 target 列迁移到 sync_targets（UNIQUE 幂等），迁移后清空旧列
+        let _ = conn.execute(
+            "INSERT OR IGNORE INTO sync_targets (repo_id, remote, url)
+             SELECT id, 'backup', target FROM repos WHERE target != ''",
+            [],
+        );
+        let _ = conn.execute("UPDATE repos SET target = '' WHERE target != ''", []);
     }
 
     /// 首次启动初始化：admin/admin123 用户、默认基地址、MCP APIKEY
@@ -230,6 +260,46 @@ impl AppState {
                 return;
             }
             std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+    }
+}
+
+/// 为仓库列表附加备份目标状态
+pub fn attach_targets(conn: &Connection, repos: &mut [Repo]) {
+    for r in repos.iter_mut() {
+        r.targets.clear();
+    }
+    let mut stmt = match conn.prepare(
+        "SELECT repo_id, remote, url, last_status, last_message, last_synced
+         FROM sync_targets ORDER BY remote",
+    ) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let rows = match stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            TargetState {
+                remote: row.get(1)?,
+                url: row.get(2)?,
+                last_status: row.get(3)?,
+                last_message: row.get(4)?,
+                last_synced: row.get(5)?,
+            },
+        ))
+    }) {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+    let map: std::collections::HashMap<String, Vec<TargetState>> = rows
+        .filter_map(Result::ok)
+        .fold(std::collections::HashMap::new(), |mut m, (id, t)| {
+            m.entry(id).or_default().push(t);
+            m
+        });
+    for r in repos.iter_mut() {
+        if let Some(ts) = map.get(&r.id) {
+            r.targets = ts.clone();
         }
     }
 }

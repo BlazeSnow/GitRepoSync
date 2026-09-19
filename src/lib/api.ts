@@ -22,7 +22,12 @@ export const api = {
   },
   saveRepo(
     token: string,
-    args: { id?: string | null; name: string; source: string; target: string },
+    args: {
+      id?: string | null;
+      name: string;
+      source: string;
+      targets: { remote: string; url: string }[];
+    },
   ) {
     return invoke<Repo>("save_repo", { token, ...args });
   },

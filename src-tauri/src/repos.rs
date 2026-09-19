@@ -36,10 +36,10 @@ fn repo_from_row(row: &rusqlite::Row) -> rusqlite::Result<Repo> {
         id: row.get(0)?,
         name: row.get(1)?,
         source: row.get(2)?,
-        target: row.get(3)?,
         last_synced: row.get(4)?,
         last_status: row.get(5)?,
         last_message: row.get(6)?,
+        targets: Vec::new(),
     })
 }
 
@@ -54,11 +54,12 @@ pub fn list_repos(state: State<'_, Arc<AppState>>, token: String) -> Result<Vec<
             "SELECT {REPO_COLS} FROM repos WHERE hidden = 0 ORDER BY name"
         ))
         .map_err(|e| e.to_string())?;
-    let repos = stmt
+    let mut repos = stmt
         .query_map([], repo_from_row)
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
+    crate::state::attach_targets(&conn, &mut repos);
     Ok(repos)
 }
 
@@ -69,27 +70,44 @@ pub fn save_repo(
     id: Option<String>,
     name: String,
     source: String,
-    target: String,
+    targets: Vec<TargetInput>,
 ) -> Result<Repo, String> {
     let username = require_session(&state, &token)?;
     let lang = gui_lang();
     let name = name.trim().to_string();
     let source = source.trim().to_string();
-    let target = target.trim().to_string();
-    if name.is_empty() || source.is_empty() || target.is_empty() {
+    if name.is_empty() || source.is_empty() {
         return Err(tr(lang, "repo-fields-empty"));
     }
+    // 目标清洗：去空行、remote/url 去空白
+    let targets: Vec<TargetInput> = targets
+        .into_iter()
+        .map(|t| TargetInput {
+            remote: t.remote.trim().to_string(),
+            url: t.url.trim().to_string(),
+        })
+        .filter(|t| !t.remote.is_empty() && !t.url.is_empty())
+        .collect();
     let repo = {
         let conn = lock(&state.conn);
         if let Some(rid) = &id {
             let updated = conn
                 .execute(
-                    "UPDATE repos SET name = ?1, source = ?2, target = ?3 WHERE id = ?4",
-                    params![name, source, target, rid],
+                    "UPDATE repos SET name = ?1, source = ?2 WHERE id = ?3",
+                    params![name, source, rid],
                 )
                 .map_err(|e| e.to_string())?;
             if updated == 0 {
                 return Err(tr(lang, "repo-not-found"));
+            }
+            conn.execute("DELETE FROM sync_targets WHERE repo_id = ?1", params![rid])
+                .map_err(|e| e.to_string())?;
+            for t in &targets {
+                conn.execute(
+                    "INSERT INTO sync_targets (repo_id, remote, url) VALUES (?1, ?2, ?3)",
+                    params![rid, t.remote, t.url],
+                )
+                .map_err(|e| e.to_string())?;
             }
             conn.query_row(
                 &format!("SELECT {REPO_COLS} FROM repos WHERE id = ?1"),
@@ -102,25 +120,31 @@ pub fn save_repo(
                 id: Uuid::new_v4().to_string(),
                 name: name.clone(),
                 source,
-                target,
                 last_synced: None,
                 last_status: "idle".into(),
                 last_message: None,
+                targets: Vec::new(),
             };
             conn.execute(
-                "INSERT INTO repos (id, name, source, target, last_synced, last_status, last_message)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT INTO repos (id, name, source, last_synced, last_status, last_message)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     repo.id,
                     repo.name,
                     repo.source,
-                    repo.target,
                     repo.last_synced,
                     repo.last_status,
                     repo.last_message
                 ],
             )
             .map_err(|e| e.to_string())?;
+            for t in &targets {
+                conn.execute(
+                    "INSERT INTO sync_targets (repo_id, remote, url) VALUES (?1, ?2, ?3)",
+                    params![repo.id, t.remote, t.url],
+                )
+                .map_err(|e| e.to_string())?;
+            }
             repo
         }
     };
@@ -245,6 +269,14 @@ pub fn stop_sync(
     Ok(())
 }
 
+/// save_repo 的单个备份目标输入
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetInput {
+    pub remote: String,
+    pub url: String,
+}
+
 /// 读取本地仓库指定远端的 URL；远端不存在返回 None
 fn git_remote_url(dir: &Path, name: &str) -> Option<String> {
     let out = Command::new("git")
@@ -272,7 +304,7 @@ pub fn discover(state: &AppState, operator: &str, lang: Lang) -> Result<(), Stri
         .unwrap_or_else(crate::state::default_base_dir);
     let base = PathBuf::from(&base_dir);
 
-    let mut found: Vec<(String, Option<String>, Option<String>)> = Vec::new();
+    let mut found: Vec<(String, Option<String>, Vec<(String, String)>)> = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&base) {
         for e in entries.flatten() {
             let path = e.path();
@@ -285,18 +317,26 @@ pub fn discover(state: &AppState, operator: &str, lang: Lang) -> Result<(), Stri
             if name.starts_with('.') || !path.join(".git").exists() {
                 continue;
             }
-            let origin = git_remote_url(&path, "origin");
-            let backup = git_remote_url(&path, "backup");
-            found.push((name.to_string(), origin, backup));
+            let remotes = git_remote_list(&path);
+            let origin = remotes
+                .iter()
+                .any(|r| r == "origin")
+                .then(|| git_remote_url(&path, "origin"))
+                .flatten();
+            let targets: Vec<(String, String)> = remotes
+                .iter()
+                .filter(|r| r.as_str() != "origin")
+                .filter_map(|r| git_remote_url(&path, r).map(|u| (r.clone(), u)))
+                .collect();
+            found.push((name.to_string(), origin, targets));
         }
     }
     found.sort();
 
-    let mut to_register: Vec<(String, String, String)> = Vec::new();
-    let mut to_patch: Vec<(String, String, String)> = Vec::new();
+    let mut to_register: Vec<(String, String, Vec<(String, String)>)> = Vec::new();
     {
         let conn = lock(&state.conn);
-        for (name, origin, backup) in found {
+        for (name, origin, targets) in found {
             let hidden: i64 = conn
                 .query_row(
                     "SELECT hidden FROM repos WHERE name = ?1",
@@ -307,41 +347,96 @@ pub fn discover(state: &AppState, operator: &str, lang: Lang) -> Result<(), Stri
             match hidden {
                 1 => continue, // 用户已删除，跳过
                 0 => {
-                    if let Some(o) = &origin {
-                        to_patch.push((name.clone(), "source".into(), o.clone()));
+                    let repo_id: String = conn
+                        .query_row(
+                            "SELECT id FROM repos WHERE name = ?1",
+                            params![name],
+                            |r| r.get(0),
+                        )
+                        .unwrap_or_default();
+                    if repo_id.is_empty() {
+                        continue;
                     }
-                    if let Some(b) = &backup {
-                        to_patch.push((name.clone(), "target".into(), b.clone()));
+                    // 补空 source，不覆盖手动修改
+                    if let Some(o) = &origin {
+                        let _ = conn.execute(
+                            "UPDATE repos SET source = ?1 WHERE id = ?2 AND source = ''",
+                            params![o, repo_id],
+                        );
+                    }
+                    // 同步目标远端集合：删除已不存在的远端，补/更新现有远端 URL
+                    let existing: Vec<String> = {
+                        let mut stmt = conn
+                            .prepare("SELECT remote FROM sync_targets WHERE repo_id = ?1")
+                            .map_err(|e| e.to_string())?;
+                        let rows = stmt
+                            .query_map(params![repo_id], |r| r.get::<_, String>(0))
+                            .map_err(|e| e.to_string())?
+                            .collect::<Result<Vec<_>, _>>()
+                            .map_err(|e| e.to_string())?;
+                        rows
+                    };
+                    for r in &existing {
+                        if !targets.iter().any(|(name, _)| name == r) {
+                            let _ = conn.execute(
+                                "DELETE FROM sync_targets WHERE repo_id = ?1 AND remote = ?2",
+                                params![repo_id, r],
+                            );
+                        }
+                    }
+                    for (remote, url) in &targets {
+                        let _ = conn.execute(
+                            "INSERT INTO sync_targets (repo_id, remote, url) VALUES (?1, ?2, ?3)
+                             ON CONFLICT(repo_id, remote) DO UPDATE SET url = excluded.url",
+                            params![repo_id, remote, url],
+                        );
                     }
                 }
                 _ => {
-                    to_register.push((
-                        name,
-                        origin.unwrap_or_default(),
-                        backup.unwrap_or_default(),
-                    ));
+                    to_register.push((name, origin.unwrap_or_default(), targets));
                 }
             }
         }
-        for (name, col, url) in &to_patch {
-            let _ = conn.execute(
-                &format!("UPDATE repos SET {col} = ?1 WHERE name = ?2 AND {col} = ''"),
-                params![url, name],
-            );
-        }
-        for (name, source, target) in &to_register {
+        for (name, source, targets) in &to_register {
+            let repo_id = Uuid::new_v4().to_string();
             conn.execute(
                 "INSERT INTO repos (id, name, source, target, last_synced, last_status, last_message, hidden)
-                 VALUES (?1, ?2, ?3, ?4, NULL, 'idle', NULL, 0)",
-                params![Uuid::new_v4().to_string(), name, source, target],
+                 VALUES (?1, ?2, ?3, '', NULL, 'idle', NULL, 0)",
+                params![repo_id, name, source],
             )
             .map_err(|e| e.to_string())?;
+            for (remote, url) in targets {
+                conn.execute(
+                    "INSERT INTO sync_targets (repo_id, remote, url) VALUES (?1, ?2, ?3)",
+                    params![repo_id, remote, url],
+                )
+                .map_err(|e| e.to_string())?;
+            }
         }
     }
     for (name, _, _) in &to_register {
         state.add_log(&tr_a(lang, "log-repo-discovered", &[("name", name)]), operator);
     }
     Ok(())
+}
+
+/// 列出本地仓库的全部远端名
+fn git_remote_list(dir: &Path) -> Vec<String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .arg("remote")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::null())
+        .output();
+    match out {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// 主界面加载入口：先自动发现基地址内仓库，再返回最新列表
@@ -430,6 +525,10 @@ fn set_running(state: &AppState, repo_id: &str) {
         "UPDATE repos SET last_status = 'running', last_message = NULL WHERE id = ?1",
         params![repo_id],
     );
+    let _ = conn.execute(
+        "UPDATE sync_targets SET last_status = 'running', last_message = NULL WHERE repo_id = ?1",
+        params![repo_id],
+    );
 }
 
 fn finish(
@@ -497,8 +596,48 @@ fn run_sync(
         },
     );
 
-    if repo.source.is_empty() || repo.target.is_empty() {
-        let msg = tr(lang, "sync-unconfigured");
+    let targets: Vec<(String, String)> = {
+        let conn = lock(&state.conn);
+        // 查询失败按无目标处理，由下方“未配置”检查给出可读错误
+        let rows = match conn
+            .prepare("SELECT remote, url FROM sync_targets WHERE repo_id = ?1 ORDER BY remote")
+        {
+            Ok(mut stmt) => stmt
+                .query_map(params![repo_id], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                })
+                .map(|rows| rows.filter_map(Result::ok).collect::<Vec<_>>())
+                .unwrap_or_default(),
+            Err(_) => Vec::new(),
+        };
+        rows
+    };
+
+    if repo.source.is_empty() {
+        let msg = tr(lang, "sync-no-source");
+        finish(
+            state,
+            &repo.name,
+            repo_id,
+            "failed",
+            Some(msg.clone()),
+            false,
+            operator,
+            lang,
+        );
+        emit_status(
+            app,
+            SyncEvent {
+                id: repo_id.to_string(),
+                status: "failed".into(),
+                message: Some(msg),
+                last_synced: repo.last_synced,
+            },
+        );
+        return;
+    }
+    if targets.is_empty() {
+        let msg = tr(lang, "sync-no-targets");
         finish(
             state,
             &repo.name,
@@ -529,7 +668,7 @@ fn run_sync(
         .get_setting("base_dir")
         .unwrap_or_else(crate::state::default_base_dir);
     let (status, message) =
-        perform_git_sync(state, repo_id, &repo, &Path::new(&base_dir), lang);
+        perform_git_sync(state, repo_id, &repo, &targets, &Path::new(&base_dir), lang);
     let success = status == "success";
     finish(
         state,
@@ -541,6 +680,8 @@ fn run_sync(
         operator,
         lang,
     );
+    // 未执行到推送的目标行（如克隆/拉取阶段失败）从 running 复位
+    reset_running_targets(state, repo_id);
     emit_status(
         app,
         SyncEvent {
@@ -562,6 +703,9 @@ struct GitStep {
     warn_key: &'static str,
 }
 
+/// git_args 注入的配置前缀参数个数（两组 -c k v）
+const GIT_CONFIG_PREFIX: usize = 4;
+
 /// 网络命令统一加低速中断配置（HTTP 停滞 120s 判死）；本地命令不受影响
 fn git_args(args: &[&str]) -> Vec<String> {
     let mut v = vec![
@@ -582,6 +726,7 @@ fn perform_git_sync(
     state: &AppState,
     repo_id: &str,
     repo: &Repo,
+    targets: &[(String, String)],
     base_dir: &Path,
     lang: Lang,
 ) -> (String, String) {
@@ -699,24 +844,66 @@ fn perform_git_sync(
     }
     push_refs.push("+refs/tags/*:refs/tags/*".into());
 
-    let mut push_cmd: Vec<String> = vec!["push".into(), "--prune".into(), repo.target.clone()];
-    push_cmd.extend(push_refs);
-
-    // 推送失败判定整个同步失败；此前的 LFS / submodule 警告保留在消息里
-    match run_git(state, repo_id, &git_args(&push_cmd.iter().map(String::as_str).collect::<Vec<_>>()), Some(local.as_path()), git_timeout, lang) {
-        Err(e) => {
-            if lock(&state.stop_requested).contains(repo_id) {
-                return ("stopped".into(), tr(lang, "manually-stopped"));
-            }
-            return ("failed".into(), e);
+    // 1 对多推送：对每个备份目标依次推送，状态按目标独立记录；
+    // 单个目标失败不阻断其余目标（最后汇总整体状态为 failed）
+    let mut any_fail = false;
+    for (remote, url) in targets {
+        if lock(&state.stop_requested).contains(repo_id) {
+            reset_running_targets(state, repo_id);
+            return ("stopped".into(), tr(lang, "manually-stopped"));
         }
-        Ok(_) => {}
+        let mut push_cmd: Vec<String> =
+            vec!["push".into(), "--prune".into(), url.clone()];
+        push_cmd.extend(push_refs.clone());
+        let target_status;
+        match run_git(
+            state,
+            repo_id,
+            &git_args(&push_cmd.iter().map(String::as_str).collect::<Vec<_>>()),
+            Some(local.as_path()),
+            git_timeout,
+            lang,
+        ) {
+            Err(e) => {
+                if lock(&state.stop_requested).contains(repo_id) {
+                    reset_running_targets(state, repo_id);
+                    return ("stopped".into(), tr(lang, "manually-stopped"));
+                }
+                any_fail = true;
+                target_status = ("failed".to_string(), Some(e));
+            }
+            Ok(_) => {
+                target_status = ("success".to_string(), None);
+            }
+        }
+        let conn = lock(&state.conn);
+        let _ = conn.execute(
+            "UPDATE sync_targets SET last_status = ?1, last_message = ?2, last_synced = ?3
+             WHERE repo_id = ?4 AND remote = ?5",
+            params![
+                target_status.0,
+                target_status.1,
+                if target_status.0 == "success" { Some(now_ms()) } else { None },
+                repo_id,
+                remote
+            ],
+        );
     }
     done.push(tr(lang, "step-push"));
 
     let mut parts = done;
     parts.extend(warnings);
-    ("success".into(), parts.join(lang.sep()))
+    let status = if any_fail { "failed" } else { "success" };
+    (status.into(), parts.join(lang.sep()))
+}
+
+/// 停止同步后把仍处于 running 的目标行复位为 idle
+fn reset_running_targets(state: &AppState, repo_id: &str) {
+    let conn = lock(&state.conn);
+    let _ = conn.execute(
+        "UPDATE sync_targets SET last_status = 'idle' WHERE repo_id = ?1 AND last_status = 'running'",
+        params![repo_id],
+    );
 }
 
 /// 运行 git 命令：子进程注册到 sync_procs 以支持“停止同步”；
@@ -824,14 +1011,22 @@ fn run_git(
     match status {
         Some(s) if s.success() => Ok(text),
         _ => {
-            eprintln!("git {:?} 执行失败：{text}", args.first());
+            eprintln!("git {:?} 执行失败：{text}", git_display_cmd(args));
             Err(if text.is_empty() {
-                format!("git {:?} 执行失败", args.first())
+                format!("git {:?} 执行失败", git_display_cmd(args))
             } else {
                 text
             })
         }
     }
+}
+
+/// 错误消息中的 git 子命令名（跳过注入的配置前缀）
+fn git_display_cmd(args: &[String]) -> String {
+    args.get(GIT_CONFIG_PREFIX)
+        .or_else(|| args.first())
+        .cloned()
+        .unwrap_or_else(|| "git".into())
 }
 
 #[cfg(test)]
@@ -881,32 +1076,60 @@ mod tests {
         state.set_setting("base_dir", &base.to_string_lossy());
         discover(&state, "test", crate::lang::Lang::Zh).unwrap();
 
-        let list = || -> Vec<(String, String, String)> {
+        let list = || -> Vec<(String, String, Vec<(String, String)>)> {
             let conn = lock(&state.conn);
             let mut stmt = conn
-                .prepare("SELECT name, source, target FROM repos WHERE hidden = 0 ORDER BY name")
+                .prepare("SELECT id, name, source FROM repos WHERE hidden = 0 ORDER BY name")
                 .unwrap();
-            stmt.query_map([], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
-            })
-            .unwrap()
-            .map(Result::unwrap)
-            .collect()
+            let mut rows: Vec<(String, String, String)> = stmt
+                .query_map([], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+                })
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            let mut out = Vec::new();
+            for (id, name, source) in rows.drain(..) {
+                let mut ts = conn
+                    .prepare("SELECT remote, url FROM sync_targets WHERE repo_id = ?1 ORDER BY remote")
+                    .unwrap();
+                let targets: Vec<(String, String)> = ts
+                    .query_map([&id], |r| {
+                        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                    })
+                    .unwrap()
+                    .map(Result::unwrap)
+                    .collect();
+                out.push((name, source, targets));
+            }
+            out
         };
         let rows = list();
         assert_eq!(rows.len(), 2, "only git repos registered: {rows:?}");
-        assert_eq!(rows[0], ("alpha".into(), "https://github.com/u/alpha.git".into(), "https://gitlab.com/u/alpha.git".into()));
-        assert_eq!(rows[1], ("beta".into(), "https://github.com/u/beta.git".into(), String::new()));
+        assert_eq!(rows[0].0, "alpha");
+        assert_eq!(rows[0].1, "https://github.com/u/alpha.git");
+        assert_eq!(
+            rows[0].2,
+            vec![("backup".to_string(), "https://gitlab.com/u/alpha.git".to_string())]
+        );
+        assert_eq!(rows[1].0, "beta");
+        assert!(rows[1].2.is_empty(), "beta has no backup remote yet");
 
         // 幂等：再次发现不产生重复
         discover(&state, "test", crate::lang::Lang::Zh).unwrap();
         assert_eq!(list().len(), 2);
 
-        // 补空值：beta 后来加了 backup 远端，再次发现应自动补上
+        // beta 后来加了 backup 远端，再次发现应自动补为目标
         git(&["remote", "add", "backup", "https://gitlab.com/u/beta.git"], &beta);
         discover(&state, "test", crate::lang::Lang::Zh).unwrap();
         let rows = list();
-        assert_eq!(rows[1].2, "https://gitlab.com/u/beta.git");
+        assert_eq!(rows[1].2, vec![("backup".to_string(), "https://gitlab.com/u/beta.git".to_string())]);
+
+        // 移除远端后目标同步删除
+        git(&["remote", "remove", "backup"], &beta);
+        discover(&state, "test", crate::lang::Lang::Zh).unwrap();
+        let rows = list();
+        assert!(rows[1].2.is_empty());
 
         // 隐藏的仓库不再被登记：隐藏 alpha 后其目录仍在基地址内
         {

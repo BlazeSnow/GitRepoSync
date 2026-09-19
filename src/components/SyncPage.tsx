@@ -32,7 +32,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { ContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
-import { IconPlus, IconRefresh, IconSquare } from "@/components/icons";
+import { IconPlus, IconRefresh, IconSquare, IconX } from "@/components/icons";
 
 const STALE_DAYS = [1, 3, 7, 30];
 
@@ -40,8 +40,13 @@ export function SyncPage({ token }: { token: string }) {
   const { t } = useTranslation();
   const [repos, setRepos] = useState<Repo[]>([]);
   const [stale, setStale] = useState("all");
-  const [edit, setEdit] = useState<EditState | null>(null);
+  const [edit, setEdit] = useState<{
+    id: string | null;
+    name: string;
+    source: string;
+  } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Repo | null>(null);
+  const [editTargets, setEditTargets] = useState<{ remote: string; url: string }[]>([]);
   const [menu, setMenu] = useState<{ x: number; y: number; repo: Repo } | null>(null);
   const [error, setError] = useState("");
 
@@ -64,6 +69,19 @@ export function SyncPage({ token }: { token: string }) {
       void unlisten.then((f) => f());
     };
   }, [load]);
+
+  const openEditor = (repo: Repo | null) => {
+    setEdit(
+      repo
+        ? { id: repo.id, name: repo.name, source: repo.source }
+        : { id: null, name: "", source: "" },
+    );
+    setEditTargets(
+      repo
+        ? repo.targets.map((t) => ({ remote: t.remote, url: t.url }))
+        : [{ remote: "backup", url: "" }],
+    );
+  };
 
   const staleIds = useMemo(() => {
     const days = stale === "all" ? 0 : Number(stale);
@@ -103,7 +121,7 @@ export function SyncPage({ token }: { token: string }) {
         id: edit.id,
         name: edit.name,
         source: edit.source,
-        target: edit.target,
+        targets: editTargets.filter((t) => t.remote.trim() || t.url.trim()),
       });
       setEdit(null);
       void load();
@@ -134,13 +152,7 @@ export function SyncPage({ token }: { token: string }) {
     ? [
         {
           label: t("editRepo"),
-          onSelect: () =>
-            setEdit({
-              id: menu.repo.id,
-              name: menu.repo.name,
-              source: menu.repo.source,
-              target: menu.repo.target,
-            }),
+          onSelect: () => openEditor(menu.repo),
         },
         {
           label: t("startSync"),
@@ -164,6 +176,29 @@ export function SyncPage({ token }: { token: string }) {
   };
 
   const running = repos.some((r) => r.lastStatus === "running");
+
+  // 表头目标列：全部仓库出现过的备份远端名（并集）
+  const targetRemotes = useMemo(() => {
+    const set = new Set<string>();
+    repos.forEach((r) => r.targets.forEach((t) => set.add(t.remote)));
+    return [...set].sort();
+  }, [repos]);
+
+  const targetCell = (repo: Repo, remote: string) => {
+    const t = repo.targets.find((x) => x.remote === remote);
+    if (!t) return <span className="text-muted-foreground/40">—</span>;
+    const badge = statusBadge[t.lastStatus] ?? statusBadge.idle;
+    return (
+      <span title={t.lastMessage ?? undefined} className="inline-flex">
+        <Badge
+          variant={badge.variant}
+          className={t.lastStatus === "running" ? "animate-pulse" : ""}
+        >
+          {badge.label}
+        </Badge>
+      </span>
+    );
+  };
 
   return (
     <div className="flex h-full flex-col p-6">
@@ -190,10 +225,7 @@ export function SyncPage({ token }: { token: string }) {
           </SelectContent>
         </Select>
         <div className="flex-1" />
-        <Button
-          variant="secondary"
-          onClick={() => setEdit({ id: null, name: "", source: "", target: "" })}
-        >
+        <Button variant="secondary" onClick={() => openEditor(null)}>
           <IconPlus />
           {t("addRepo")}
         </Button>
@@ -205,9 +237,13 @@ export function SyncPage({ token }: { token: string }) {
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead className="w-52">{t("colRepo")}</TableHead>
-              <TableHead>{t("colSource")}</TableHead>
-              <TableHead>{t("colTarget")}</TableHead>
+              <TableHead className="w-44">{t("colRepo")}</TableHead>
+              <TableHead className="max-w-56">{t("colSource")}</TableHead>
+              {targetRemotes.map((remote) => (
+                <TableHead key={remote} className="min-w-24">
+                  <span className="font-mono text-xs">{remote}</span>
+                </TableHead>
+              ))}
               <TableHead className="w-24">{t("colStatus")}</TableHead>
               <TableHead className="w-32">{t("colLastSynced")}</TableHead>
             </TableRow>
@@ -226,14 +262,7 @@ export function SyncPage({ token }: { token: string }) {
                   <TableRow
                     key={repo.id}
                     className="cursor-default select-none"
-                    onDoubleClick={() =>
-                      setEdit({
-                        id: repo.id,
-                        name: repo.name,
-                        source: repo.source,
-                        target: repo.target,
-                      })
-                    }
+                    onDoubleClick={() => openEditor(repo)}
                     onContextMenu={(e) => openMenu(e, repo)}
                     title={repo.lastMessage ?? undefined}
                   >
@@ -244,12 +273,9 @@ export function SyncPage({ token }: { token: string }) {
                     >
                       {repo.source || t("notConfigured")}
                     </TableCell>
-                    <TableCell
-                      className="max-w-0 truncate text-muted-foreground"
-                      title={repo.target || undefined}
-                    >
-                      {repo.target || t("notConfigured")}
-                    </TableCell>
+                    {targetRemotes.map((remote) => (
+                      <TableCell key={remote}>{targetCell(repo, remote)}</TableCell>
+                    ))}
                     <TableCell>
                       <Badge
                         variant={badge.variant}
@@ -297,13 +323,49 @@ export function SyncPage({ token }: { token: string }) {
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="repo-target">{t("fieldTarget")}</Label>
-              <Input
-                id="repo-target"
-                value={edit?.target ?? ""}
-                onChange={(e) => setEdit((s) => (s ? { ...s, target: e.target.value } : s))}
-                placeholder={t("placeholderTarget")}
-              />
+              <Label>{t("fieldTarget")}</Label>
+              <div className="space-y-1.5">
+                {editTargets.map((tg, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <Input
+                      className="w-28 shrink-0"
+                      placeholder={t("targetRemote")}
+                      value={tg.remote}
+                      onChange={(e) =>
+                        setEditTargets((ts) =>
+                          ts.map((x, j) => (j === i ? { ...x, remote: e.target.value } : x)),
+                        )
+                      }
+                    />
+                    <Input
+                      className="min-w-0 flex-1 font-mono text-xs"
+                      placeholder={t("targetUrl")}
+                      value={tg.url}
+                      onChange={(e) =>
+                        setEditTargets((ts) =>
+                          ts.map((x, j) => (j === i ? { ...x, url: e.target.value } : x)),
+                        )
+                      }
+                    />
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      title={t("confirmDelete")}
+                      onClick={() => setEditTargets((ts) => ts.filter((_, j) => j !== i))}
+                    >
+                      <IconX />
+                    </Button>
+                  </div>
+                ))}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setEditTargets((ts) => [...ts, { remote: "", url: "" }])}
+                >
+                  <IconPlus />
+                  {t("addTarget")}
+                </Button>
+              </div>
             </div>
           </div>
           <DialogFooter>
@@ -337,9 +399,4 @@ export function SyncPage({ token }: { token: string }) {
   );
 }
 
-interface EditState {
-  id: string | null;
-  name: string;
-  source: string;
-  target: string;
-}
+

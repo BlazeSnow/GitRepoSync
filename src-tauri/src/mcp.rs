@@ -131,7 +131,18 @@ fn tools_list(lang: Lang) -> Value {
                     "properties": {
                         "name": { "type": "string", "description": tr(lang, "tool-add-repo-name") },
                         "source": { "type": "string", "description": tr(lang, "tool-add-repo-source") },
-                        "target": { "type": "string", "description": tr(lang, "tool-add-repo-target") }
+                        "target": { "type": "string", "description": tr(lang, "tool-add-repo-target") },
+                        "targets": {
+                            "type": "array",
+                            "description": tr(lang, "tool-add-repo-targets"),
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "remote": { "type": "string" },
+                                    "url": { "type": "string" }
+                                }
+                            }
+                        }
                     },
                     "required": ["name", "source", "target"]
                 }
@@ -182,10 +193,10 @@ fn repo_from_row(row: &rusqlite::Row) -> rusqlite::Result<Repo> {
         id: row.get(0)?,
         name: row.get(1)?,
         source: row.get(2)?,
-        target: row.get(3)?,
         last_synced: row.get(4)?,
         last_status: row.get(5)?,
         last_message: row.get(6)?,
+        targets: Vec::new(),
     })
 }
 
@@ -198,11 +209,12 @@ fn list_repos_value(state: &AppState) -> Result<Value, String> {
             "SELECT {REPO_COLS} FROM repos WHERE hidden = 0 ORDER BY name"
         ))
         .map_err(|e| e.to_string())?;
-    let repos = stmt
+    let mut repos = stmt
         .query_map([], repo_from_row)
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
+    crate::state::attach_targets(&conn, &mut repos);
     serde_json::to_value(repos).map_err(|e| e.to_string())
 }
 
@@ -220,36 +232,77 @@ fn tools_call(state: &Arc<AppState>, lang: Lang, params: &Value) -> Result<Value
                     .trim()
                     .to_string()
             };
-            let (rname, source, target) = (field("name"), field("source"), field("target"));
-            if rname.is_empty() || source.is_empty() || target.is_empty() {
+            let (rname, source) = (field("name"), field("source"));
+            if rname.is_empty() || source.is_empty() {
                 return Err((-32602, tr(lang, "repo-fields-empty")));
             }
-            let repo = Repo {
+            // 目标：优先 targets 数组 [{remote,url}]；兼容单 target 字符串（远端名 backup）
+            let mut targets: Vec<(String, String)> = args
+                .get("targets")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|t| {
+                            let remote = t.get("remote")?.as_str()?.trim().to_string();
+                            let url = t.get("url")?.as_str()?.trim().to_string();
+                            (!remote.is_empty() && !url.is_empty()).then_some((remote, url))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            if targets.is_empty() {
+                if let Some(t) = args.get("target").and_then(|v| v.as_str()) {
+                    let t = t.trim();
+                    if !t.is_empty() {
+                        targets.push(("backup".into(), t.to_string()));
+                    }
+                }
+            }
+            if targets.is_empty() {
+                return Err((-32602, tr(lang, "sync-no-targets")));
+            }
+            let mut repo = Repo {
                 id: Uuid::new_v4().to_string(),
                 name: rname.clone(),
                 source,
-                target,
                 last_synced: None,
                 last_status: "idle".into(),
                 last_message: None,
+                targets: Vec::new(),
             };
             {
                 let conn = lock(&state.conn);
                 conn.execute(
                     "INSERT INTO repos (id, name, source, target, last_synced, last_status, last_message)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                     VALUES (?1, ?2, ?3, '', ?4, ?5, ?6)",
                     params![
                         repo.id,
                         repo.name,
                         repo.source,
-                        repo.target,
                         repo.last_synced,
                         repo.last_status,
                         repo.last_message
                     ],
                 )
                 .map_err(|e| (-32602, e.to_string()))?;
+                for (remote, url) in &targets {
+                    conn.execute(
+                        "INSERT INTO sync_targets (repo_id, remote, url) VALUES (?1, ?2, ?3)",
+                        params![repo.id, remote, url],
+                    )
+                    .map_err(|e| (-32602, e.to_string()))?;
+                }
             }
+            repo.targets = targets
+                .iter()
+                .map(|(remote, url)| crate::state::TargetState {
+                    remote: remote.clone(),
+                    url: url.clone(),
+                    last_status: "idle".into(),
+                    last_message: None,
+                    last_synced: None,
+                })
+                .collect();
             state.add_log(
                 &tr_a(lang, "log-mcp-repo-added", &[("name", &rname)]),
                 OPERATOR,
@@ -268,6 +321,8 @@ fn tools_call(state: &Arc<AppState>, lang: Lang, params: &Value) -> Result<Value
             let deleted = {
                 let conn = lock(&state.conn);
                 conn.execute("UPDATE repos SET hidden = 1 WHERE id = ?1", params![id])
+                    .map_err(|e| (-32602, e.to_string()))?;
+                conn.execute("DELETE FROM sync_targets WHERE repo_id = ?1", params![id])
                     .map_err(|e| (-32602, e.to_string()))?
             };
             if deleted == 0 {

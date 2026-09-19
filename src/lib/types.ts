@@ -2,14 +2,22 @@ export type PageKey = "sync" | "logs" | "mcp" | "settings";
 
 export type SyncStatus = "idle" | "running" | "success" | "failed" | "stopped";
 
+export interface TargetState {
+  remote: string;
+  url: string;
+  lastStatus: SyncStatus;
+  lastMessage: string | null;
+  lastSynced: number | null;
+}
+
 export interface Repo {
   id: string;
   name: string;
   source: string;
-  target: string;
   lastSynced: number | null;
   lastStatus: SyncStatus;
   lastMessage: string | null;
+  targets: TargetState[];
 }
 
 export interface LoginResult {

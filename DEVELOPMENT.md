@@ -42,7 +42,7 @@ pnpm tauri dev          # 以开发模式启动（前端热重载 + Rust 增量�
 pnpm tauri build        # 构建发布版安装包
 ```
 
-测试命令（PR 检查会运行同一套）：
+测试命令（本地运行）：
 
 ```bash
 pnpm test                                # 前端单元测试（vitest）

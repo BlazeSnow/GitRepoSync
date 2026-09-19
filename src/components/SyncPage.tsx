@@ -252,19 +252,19 @@ export function SyncPage({ token }: { token: string }) {
 
       {error && <p className="mb-3 text-sm text-destructive">{error}</p>}
 
-      <div className="min-h-0 flex-1 rounded-lg border bg-card">
-        <Table>
+      <div className="min-h-0 flex-1 overflow-hidden rounded-lg border bg-card">
+        <Table className="border-separate border-spacing-0">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead className="w-44">{t("colRepo")}</TableHead>
-              <TableHead className="max-w-56">{t("colSource")}</TableHead>
+              <TableHead className="sticky top-0 z-10 w-44 bg-card">{t("colRepo")}</TableHead>
+              <TableHead className="sticky top-0 z-10 max-w-56 bg-card">{t("colSource")}</TableHead>
               {targetRemotes.map((remote) => (
-                <TableHead key={remote} className="min-w-24">
+                <TableHead key={remote} className="sticky top-0 z-10 min-w-24 bg-card">
                   <span className="font-mono text-xs">{remote}</span>
                 </TableHead>
               ))}
-              <TableHead className="w-24">{t("colStatus")}</TableHead>
-              <TableHead className="w-32">{t("colLastSynced")}</TableHead>
+              <TableHead className="sticky top-0 z-10 w-24 bg-card">{t("colStatus")}</TableHead>
+              <TableHead className="sticky top-0 z-10 w-32 bg-card">{t("colLastSynced")}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>

@@ -7,16 +7,6 @@ import { relativeTime } from "@/i18n";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
   Select,
   SelectContent,
   SelectItem,
@@ -32,7 +22,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { ContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
-import { IconPlus, IconRefresh, IconSquare, IconX } from "@/components/icons";
+import { RepoEditDialog } from "@/components/RepoEditDialog";
+import { DeleteRepoDialog } from "@/components/DeleteRepoDialog";
+import { IconPlus, IconRefresh, IconSquare } from "@/components/icons";
 
 const STALE_DAYS = [1, 3, 7, 30];
 
@@ -43,13 +35,9 @@ export function SyncPage({ token }: { token: string }) {
   const { t } = useTranslation();
   const [repos, setRepos] = useState<Repo[]>([]);
   const [stale, setStale] = useState("all");
-  const [edit, setEdit] = useState<{
-    id: string | null;
-    name: string;
-    source: string;
-  } | null>(null);
+  // 编辑弹窗：null 表示添加，Repo 表示编辑；null 外层表示关闭
+  const [editor, setEditor] = useState<{ repo: Repo | null } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Repo | null>(null);
-  const [editTargets, setEditTargets] = useState<{ remote: string; url: string }[]>([]);
   const [menu, setMenu] = useState<{ x: number; y: number; repo: Repo } | null>(null);
   const [error, setError] = useState("");
 
@@ -92,19 +80,6 @@ export function SyncPage({ token }: { token: string }) {
     };
   }, [load]);
 
-  const openEditor = (repo: Repo | null) => {
-    setEdit(
-      repo
-        ? { id: repo.id, name: repo.name, source: repo.source }
-        : { id: null, name: "", source: "" },
-    );
-    setEditTargets(
-      repo
-        ? repo.targets.map((t) => ({ remote: t.remote, url: t.url }))
-        : [{ remote: "backup", url: "" }],
-    );
-  };
-
   const staleIds = useMemo(() => {
     const days = stale === "all" ? 0 : Number(stale);
     const inRange = (r: Repo) =>
@@ -133,23 +108,6 @@ export function SyncPage({ token }: { token: string }) {
     }
   }
 
-  async function handleSave() {
-    if (!edit) return;
-    setError("");
-    try {
-      await api.saveRepo(token, {
-        id: edit.id,
-        name: edit.name,
-        source: edit.source,
-        targets: editTargets.filter((t) => t.remote.trim() || t.url.trim()),
-      });
-      setEdit(null);
-      void load();
-    } catch (err) {
-      setError(String(err));
-    }
-  }
-
   async function handleDelete() {
     if (!deleteTarget) return;
     setError("");
@@ -172,7 +130,7 @@ export function SyncPage({ token }: { token: string }) {
     ? [
         {
           label: t("editRepo"),
-          onSelect: () => openEditor(menu.repo),
+          onSelect: () => setEditor({ repo: menu.repo }),
         },
         {
           label: t("startSync"),
@@ -201,10 +159,10 @@ export function SyncPage({ token }: { token: string }) {
   const remoteCell = (repo: Repo) => {
     const lines: { remote: string; url: string; tip?: string }[] = [
       { remote: "origin", url: repo.source },
-      ...repo.targets.map((t) => ({
-        remote: t.remote,
-        url: t.url,
-        tip: [t.lastMessage, t.lastStatus].filter(Boolean).join(" | "),
+      ...repo.targets.map((tg) => ({
+        remote: tg.remote,
+        url: tg.url,
+        tip: [tg.lastMessage, tg.lastStatus].filter(Boolean).join(" | "),
       })),
     ];
     return (
@@ -247,7 +205,7 @@ export function SyncPage({ token }: { token: string }) {
           </SelectContent>
         </Select>
         <div className="flex-1" />
-        <Button variant="secondary" onClick={() => openEditor(null)}>
+        <Button variant="secondary" onClick={() => setEditor({ repo: null })}>
           <IconPlus />
           {t("addRepo")}
         </Button>
@@ -279,7 +237,7 @@ export function SyncPage({ token }: { token: string }) {
                   <TableRow
                     key={repo.id}
                     className="cursor-default select-none"
-                    onDoubleClick={() => openEditor(repo)}
+                    onDoubleClick={() => setEditor({ repo })}
                     onContextMenu={(e) => openMenu(e, repo)}
                     title={repo.lastMessage ?? undefined}
                   >
@@ -310,106 +268,25 @@ export function SyncPage({ token }: { token: string }) {
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />}
 
-      <Dialog open={edit !== null} onOpenChange={(open) => !open && setEdit(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{edit?.id ? t("editRepo") : t("addRepoTitle")}</DialogTitle>
-            <DialogDescription>{t("repoFlowDesc")}</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="repo-name">{t("fieldName")}</Label>
-              <Input
-                id="repo-name"
-                value={edit?.name ?? ""}
-                onChange={(e) => setEdit((s) => (s ? { ...s, name: e.target.value } : s))}
-                placeholder={t("placeholderName")}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="repo-source">{t("fieldSource")}</Label>
-              <Input
-                id="repo-source"
-                value={edit?.source ?? ""}
-                onChange={(e) => setEdit((s) => (s ? { ...s, source: e.target.value } : s))}
-                placeholder={t("placeholderSource")}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>{t("fieldTarget")}</Label>
-              <div className="space-y-1.5">
-                {editTargets.map((tg, i) => (
-                  <div key={i} className="flex items-center gap-2">
-                    <Input
-                      className="w-28 shrink-0"
-                      placeholder={t("targetRemote")}
-                      value={tg.remote}
-                      onChange={(e) =>
-                        setEditTargets((ts) =>
-                          ts.map((x, j) => (j === i ? { ...x, remote: e.target.value } : x)),
-                        )
-                      }
-                    />
-                    <Input
-                      className="min-w-0 flex-1 font-mono text-xs"
-                      placeholder={t("targetUrl")}
-                      value={tg.url}
-                      onChange={(e) =>
-                        setEditTargets((ts) =>
-                          ts.map((x, j) => (j === i ? { ...x, url: e.target.value } : x)),
-                        )
-                      }
-                    />
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      title={t("confirmDelete")}
-                      onClick={() => setEditTargets((ts) => ts.filter((_, j) => j !== i))}
-                    >
-                      <IconX />
-                    </Button>
-                  </div>
-                ))}
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setEditTargets((ts) => [...ts, { remote: "", url: "" }])}
-                >
-                  <IconPlus />
-                  {t("addTarget")}
-                </Button>
-              </div>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setEdit(null)}>
-              {t("cancel")}
-            </Button>
-            <Button onClick={handleSave}>{t("save")}</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {editor && (
+        <RepoEditDialog
+          token={token}
+          repo={editor.repo}
+          onClose={() => setEditor(null)}
+          onSaved={() => {
+            setEditor(null);
+            void load();
+          }}
+        />
+      )}
 
-      <Dialog open={deleteTarget !== null} onOpenChange={(open) => !open && setDeleteTarget(null)}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>{t("deleteRepo")}</DialogTitle>
-            <DialogDescription>
-              {deleteTarget && t("deleteRepoDesc", { name: deleteTarget.name })}
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteTarget(null)}>
-              {t("cancel")}
-            </Button>
-            <Button variant="destructive" onClick={handleDelete}>
-              {t("confirmDelete")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {deleteTarget && (
+        <DeleteRepoDialog
+          repo={deleteTarget}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={() => void handleDelete()}
+        />
+      )}
     </div>
   );
 }
-
-

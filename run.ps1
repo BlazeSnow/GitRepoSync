@@ -109,6 +109,10 @@ try {
         if (-not $stale) { Write-Host '  端口空闲' }
         End-Step
 
+        # dev 编译会把 exe 覆盖为指向 localhost:1420 的开发变体，删除构建戳，
+        # 使下次默认模式的 run.ps1 强制重建为独立运行的变体
+        $stampDev = Join-Path $RepoRoot 'src-tauri/target/debug/.grs-build-stamp'
+        Remove-Item $stampDev -ErrorAction SilentlyContinue
         Start-Step '启动开发模式（Rust 增量编译 + 前端热重载；改动越多编译越久，窗口出现前请耐心等待；Ctrl+C 退出）...'
         pnpm tauri dev
         if ($LASTEXITCODE -ne 0) { throw '运行失败' }
@@ -122,7 +126,9 @@ try {
         # 默认：快速启动 Debug 版；源码晚于上次构建时先增量重建
         $exe = Join-Path $RepoRoot 'src-tauri\target\debug\git-repo-sync.exe'
         Start-Step '检查源码变更（与上次构建产物对比）...'
-        $needBuild = $Rebuild -or -not (Test-Path $exe)
+        # 无构建戳说明 exe 被 -Dev 的编译覆盖过（指向 localhost:1420 的开发变体），必须重建
+        $stamp = Join-Path $RepoRoot 'src-tauri/target/debug/.grs-build-stamp'
+        $needBuild = $Rebuild -or -not (Test-Path $exe) -or -not (Test-Path $stamp)
         if (-not $needBuild) {
             $exeTime = (Get-Item $exe).LastWriteTimeUtc
             # 注意：单文件不能传给 Get-ChildItem -Recurse（会被当通配模式递归，极慢），
@@ -159,6 +165,7 @@ try {
             Start-Step '构建 Debug 版（前端构建 + Rust 增量编译与链接——主要耗时来源，改动越多越久，最长可达数分钟）...'
             pnpm tauri build --debug --no-bundle
             if ($LASTEXITCODE -ne 0) { throw 'Debug 构建失败' }
+            Set-Content -Path $stamp -Value (Get-Date -Format o)
             End-Step
         }
 

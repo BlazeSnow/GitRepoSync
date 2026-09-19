@@ -60,7 +60,7 @@ const zh = {
   deleteRepo: "删除仓库",
   deleteRepoDesc: "确定要删除仓库“{{name}}”吗？仅移除记录，不会删除本地文件。",
   confirmDelete: "删除",
-  never: "从不",
+  never: "从未",
   justNow: "刚刚",
   minutesAgo: "{{count}} 分钟前",
   hoursAgo: "{{count}} 小时前",

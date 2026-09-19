@@ -3,15 +3,14 @@
   快速启动 Git Repo Sync：自动处理终端编码、检查依赖、按需构建并运行 Debug 版。
 
 .DESCRIPTION
-  默认启动 Debug 版桌面应用：若未构建过或源码晚于上次构建，则先执行增量构建
-  （pnpm tauri build --debug --no-bundle），再后台启动可执行文件——脚本立即返回，
-  不阻塞终端，应用独立运行。
+  默认启动 Debug 版桌面应用：每次运行都执行增量构建
+  （pnpm tauri build --debug --no-bundle，源码无变更时仅数秒），再后台启动
+  可执行文件——脚本立即返回，不阻塞终端，应用独立运行。
   脚本按阶段输出进度与各阶段耗时（▶ 进行中 / ✓ 完成），构建阶段会注明预计时长：
   Rust 编译与链接是主要耗时来源（改动越多越久，最长可达数分钟）。
   可选参数切换模式：
   -Dev      开发模式：pnpm tauri dev（前端热重载 + Rust 增量编译，占用终端）。
   -Build    打包当前平台发布版安装包（pnpm tauri build）。
-  -Rebuild  强制重新构建 Debug 版后再启动。
   首次运行会自动执行 pnpm install 安装前端依赖，可使用 -SkipInstall 跳过。
   脚本开头会将终端切换为 UTF-8 编码（chcp 65001），避免 GBK 终端下中文乱码。
 
@@ -21,24 +20,19 @@
 .PARAMETER Build
   打包发布版安装包。
 
-.PARAMETER Rebuild
-  强制重新构建 Debug 版后再启动。
-
 .PARAMETER SkipInstall
   跳过依赖安装（pnpm install）。
 
 .EXAMPLE
-  .\run.ps1            # 构建并后台启动 Debug 版（源码有改动时自动增量重建）
+  .\run.ps1            # 增量构建并后台启动 Debug 版
   .\run.ps1 -Dev       # 开发模式（热重载）
   .\run.ps1 -Build     # 打包发布版
-  .\run.ps1 -Rebuild   # 强制重建 Debug 版并后台启动
 #>
 
 [CmdletBinding()]
 param(
     [switch]$Dev,
     [switch]$Build,
-    [switch]$Rebuild,
     [switch]$SkipInstall
 )
 
@@ -109,10 +103,6 @@ try {
         if (-not $stale) { Write-Host '  端口空闲' }
         End-Step
 
-        # dev 编译会把 exe 覆盖为指向 localhost:1420 的开发变体，删除构建戳，
-        # 使下次默认模式的 run.ps1 强制重建为独立运行的变体
-        $stampDev = Join-Path $RepoRoot 'src-tauri/target/debug/.grs-build-stamp'
-        Remove-Item $stampDev -ErrorAction SilentlyContinue
         Start-Step '启动开发模式（Rust 增量编译 + 前端热重载；改动越多编译越久，窗口出现前请耐心等待；Ctrl+C 退出）...'
         pnpm tauri dev
         if ($LASTEXITCODE -ne 0) { throw '运行失败' }
@@ -123,52 +113,13 @@ try {
         if ($LASTEXITCODE -ne 0) { throw '打包失败' }
     }
     else {
-        # 默认：快速启动 Debug 版；源码晚于上次构建时先增量重建
-        $exe = Join-Path $RepoRoot 'src-tauri\target\debug\git-repo-sync.exe'
-        Start-Step '检查源码变更（与上次构建产物对比）...'
-        # 无构建戳说明 exe 被 -Dev 的编译覆盖过（指向 localhost:1420 的开发变体），必须重建
-        $stamp = Join-Path $RepoRoot 'src-tauri/target/debug/.grs-build-stamp'
-        $needBuild = $Rebuild -or -not (Test-Path $exe) -or -not (Test-Path $stamp)
-        if (-not $needBuild) {
-            $exeTime = (Get-Item $exe).LastWriteTimeUtc
-            # 注意：单文件不能传给 Get-ChildItem -Recurse（会被当通配模式递归，极慢），
-            # 目录用递归枚举，单文件直接 Get-Item
-            $newestTime = [DateTime]::MinValue
-            $newestFile = $null
-            foreach ($dir in @('src', 'src-tauri\src')) {
-                Get-ChildItem -Recurse -File (Join-Path $RepoRoot $dir) -ErrorAction SilentlyContinue |
-                    ForEach-Object {
-                        if ($_.LastWriteTimeUtc -gt $newestTime) {
-                            $newestTime = $_.LastWriteTimeUtc
-                            $newestFile = $_
-                        }
-                    }
-            }
-            foreach ($file in @('src-tauri\Cargo.toml', 'src-tauri\tauri.conf.json', 'index.html', 'package.json')) {
-                $fi = Get-Item -LiteralPath (Join-Path $RepoRoot $file) -ErrorAction SilentlyContinue
-                if ($fi -and $fi.LastWriteTimeUtc -gt $newestTime) {
-                    $newestTime = $fi.LastWriteTimeUtc
-                    $newestFile = $fi
-                }
-            }
-            if ($newestFile -and $newestTime -gt $exeTime) {
-                $needBuild = $true
-                Write-Host ("  检测到变更：{0}" -f $newestFile.FullName.Replace("$RepoRoot\", ''))
-            }
-        }
-        if (-not $needBuild) {
-            Write-Host '  源码无变更，跳过构建'
-        }
+        # 默认：总是增量构建（源码无变更时仅数秒），保证启动的是最新代码
+        Start-Step '构建 Debug 版（前端构建 + Rust 增量编译与链接——主要耗时来源，改动越多越久，最长可达数分钟）...'
+        pnpm tauri build --debug --no-bundle
+        if ($LASTEXITCODE -ne 0) { throw 'Debug 构建失败' }
         End-Step
 
-        if ($needBuild) {
-            Start-Step '构建 Debug 版（前端构建 + Rust 增量编译与链接——主要耗时来源，改动越多越久，最长可达数分钟）...'
-            pnpm tauri build --debug --no-bundle
-            if ($LASTEXITCODE -ne 0) { throw 'Debug 构建失败' }
-            Set-Content -Path $stamp -Value (Get-Date -Format o)
-            End-Step
-        }
-
+        $exe = Join-Path $RepoRoot 'src-tauri/target/debug/git-repo-sync.exe'
         Start-Step '后台启动应用...'
         Start-Process -FilePath $exe -WorkingDirectory $RepoRoot | Out-Null
         End-Step

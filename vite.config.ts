@@ -21,6 +21,10 @@ export default defineConfig({
     port: 1420,
     strictPort: true,
     host: false,
+    // 关键：不监听 src-tauri（cargo 编译会锁定 target 下的 exe，导致 fs.watch EBUSY 崩溃）
+    watch: {
+      ignored: ["**/src-tauri/**"],
+    },
   },
   envPrefix: ["VITE_", "TAURI_ENV_"],
   build: {

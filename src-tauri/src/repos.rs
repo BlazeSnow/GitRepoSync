@@ -79,6 +79,29 @@ pub fn save_repo(
     if name.is_empty() || source.is_empty() {
         return Err(tr(lang, "repo-fields-empty"));
     }
+    // 名称唯一：name 是中转目录名与自动发现的身份（数据库层有唯一索引兜底），
+    // 此处先给出可读提示（含隐藏行，改名不得与任何现有行冲突）
+    {
+        let conn = lock(&state.conn);
+        let dup: i64 = if let Some(rid) = &id {
+            conn.query_row(
+                "SELECT COUNT(*) FROM repos WHERE name = ?1 AND id != ?2",
+                params![name, rid],
+                |r| r.get(0),
+            )
+            .unwrap_or(0)
+        } else {
+            conn.query_row(
+                "SELECT COUNT(*) FROM repos WHERE name = ?1",
+                params![name],
+                |r| r.get(0),
+            )
+            .unwrap_or(0)
+        };
+        if dup > 0 {
+            return Err(tr_a(lang, "repo-name-exists", &[("name", &name)]));
+        }
+    }
     // 目标清洗：去空行、remote/url 去空白
     let targets: Vec<TargetInput> = targets
         .into_iter()

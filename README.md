@@ -66,7 +66,7 @@
 }
 ```
 
-可用工具：`list_repos`、`add_repo`、`remove_repo`、`sync_repo`、`get_sync_status`、`get_base_dir`、`set_base_dir`。
+可用工具：`list_repos`、`add_repo`、`update_repo`、`remove_repo`、`sync_repo`、`get_sync_status`、`get_base_dir`、`set_base_dir`。其中 `add_repo` 按仓库名幂等（同名仓库已存在时合并目标而非新建），`remove_repo` 为软删除（隐藏条目并清空目标，不影响基地址内的目录）。
 
 ## 命令行
 

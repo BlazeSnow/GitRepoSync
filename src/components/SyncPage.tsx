@@ -196,25 +196,28 @@ export function SyncPage({ token }: { token: string }) {
 
   const running = repos.some((r) => r.lastStatus === "running");
 
-  // 表头目标列：全部仓库出现过的备份远端名（并集）
-  const targetRemotes = useMemo(() => {
-    const set = new Set<string>();
-    repos.forEach((r) => r.targets.forEach((t) => set.add(t.remote)));
-    return [...set].sort();
-  }, [repos]);
-
-  // 目标列与源地址列同款显示：纯文本、截断、悬停显示最近同步消息
-  const targetCell = (repo: Repo, remote: string) => {
-    const t = repo.targets.find((x) => x.remote === remote);
-    if (!t) return <span className="text-muted-foreground/40">—</span>;
-    const tip = [t.lastMessage, t.lastStatus].filter(Boolean).join(" | ");
+  // 地址列：origin 与全部备份目标压缩在一个单元格内，每行「远端名: 地址」
+  const remoteCell = (repo: Repo) => {
+    const lines: { remote: string; url: string; tip?: string }[] = [
+      { remote: "origin", url: repo.source },
+      ...repo.targets.map((t) => ({
+        remote: t.remote,
+        url: t.url,
+        tip: [t.lastMessage, t.lastStatus].filter(Boolean).join(" | "),
+      })),
+    ];
     return (
-      <span
-        className="block truncate text-muted-foreground"
-        title={tip || undefined}
-      >
-        {t.url}
-      </span>
+      <div className="space-y-0.5">
+        {lines.map((l) => (
+          <div
+            key={l.remote}
+            className="truncate text-muted-foreground"
+            title={l.tip || undefined}
+          >
+            {l.remote}: {l.url || t("notConfigured")}
+          </div>
+        ))}
+      </div>
     );
   };
 
@@ -256,12 +259,7 @@ export function SyncPage({ token }: { token: string }) {
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead className="sticky top-0 z-10 w-44 bg-card">{t("colRepo")}</TableHead>
-              <TableHead className="sticky top-0 z-10 w-48 bg-card">{t("colSource")}</TableHead>
-              {targetRemotes.map((remote) => (
-                <TableHead key={remote} className="sticky top-0 z-10 w-48 bg-card">
-                  <span className="font-mono text-xs">{remote}</span>
-                </TableHead>
-              ))}
+              <TableHead className="sticky top-0 z-10 bg-card">{t("colAddress")}</TableHead>
               <TableHead className="sticky top-0 z-10 w-24 bg-card">{t("colStatus")}</TableHead>
               <TableHead className="sticky top-0 z-10 w-32 bg-card">{t("colLastSynced")}</TableHead>
             </TableRow>
@@ -285,19 +283,7 @@ export function SyncPage({ token }: { token: string }) {
                     title={repo.lastMessage ?? undefined}
                   >
                     <TableCell className="font-medium">{repo.name}</TableCell>
-                    <TableCell
-                      className="w-48 text-muted-foreground"
-                      title={repo.source || undefined}
-                    >
-                      <span className="block truncate">
-                        {repo.source || t("notConfigured")}
-                      </span>
-                    </TableCell>
-                    {targetRemotes.map((remote) => (
-                      <TableCell key={remote} className="w-48">
-                        {targetCell(repo, remote)}
-                      </TableCell>
-                    ))}
+                    <TableCell>{remoteCell(repo)}</TableCell>
                     <TableCell>
                       <Badge
                         variant={badge.variant}

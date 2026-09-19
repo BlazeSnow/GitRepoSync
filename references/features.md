@@ -102,3 +102,9 @@
   - 均未提供时默认中文；缺失翻译自动回落中文
   - MCP 工具名称为协议契约，不随语言变化
 - 注意：日志与同步结果按操作发生时的语言写入数据库，切换语言不会改写历史记录
+
+## 9. 外观主题（深色模式）
+
+- 默认跟随系统深浅色（`prefers-color-scheme`），系统切换时即时生效；设置页「外观」卡片可手动指定：跟随系统 / 浅色 / 深色，选择存入 localStorage（`grs_theme`）
+- 实现：Tailwind v4 按类名切换深色（`@custom-variant dark`，`<html class="dark">`）；深色调色板集中在 `src/index.css` 的 `.dark` 变量块，组件全部使用语义色（`bg-background` / `text-foreground` 等），整体换肤无需逐组件适配；`color-scheme` 随主题同步切换，滚动条与原生控件跟随
+- 首帧防闪烁：`index.html` 内联脚本在渲染前读取偏好并应用 `.dark` 类，避免深色系统下启动白屏；`src/lib/theme.ts` 负责偏好读写、主题应用与系统主题变化监听

@@ -1,6 +1,9 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+/* 深色模式按类名切换（<html class="dark">，由 src/lib/theme.ts 与 index.html 内联脚本应用） */
+@custom-variant dark (&:is(.dark *));
+
 /* Tailwind v4：主题经 @theme inline 映射到 CSS 变量（shadcn/ui 官方 v4 方式） */
 @theme inline {
   --color-border: hsl(var(--border));
@@ -52,6 +55,34 @@
   --input: 240 5.9% 90%;
   --ring: 240 5.9% 10%;
   --radius: 0.5rem;
+  color-scheme: light;
+}
+
+/* 深色调色板：组件全部走语义色变量，此块即完成整体换肤 */
+.dark {
+  --background: 240 10% 3.9%;
+  --foreground: 0 0% 98%;
+  --card: 240 10% 3.9%;
+  --card-foreground: 0 0% 98%;
+  --popover: 240 10% 3.9%;
+  --popover-foreground: 0 0% 98%;
+  --primary: 0 0% 98%;
+  --primary-foreground: 240 5.9% 10%;
+  --secondary: 240 3.7% 15.9%;
+  --secondary-foreground: 0 0% 98%;
+  --muted: 240 3.7% 15.9%;
+  --muted-foreground: 240 5% 64.9%;
+  --accent: 240 3.7% 15.9%;
+  --accent-foreground: 0 0% 98%;
+  /* destructive 在深色下直接用作 text-destructive 等前景色，取较亮值保证可读 */
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 98%;
+  --success: 142 71% 45%;
+  --success-foreground: 0 0% 98%;
+  --border: 240 3.7% 15.9%;
+  --input: 240 3.7% 15.9%;
+  --ring: 240 4.9% 83.9%;
+  color-scheme: dark;
 }
 
 @layer base {

@@ -92,6 +92,11 @@ const zh = {
   toolSetBaseDir: "修改本地仓库基地址（中转站目录）",
   settingsTitle: "设置",
   langDesc: "切换界面语言，立即生效",
+  appearanceTitle: "外观",
+  themeDesc: "跟随系统深浅色显示，也可手动指定",
+  themeSystem: "跟随系统",
+  themeLight: "浅色",
+  themeDark: "深色",
   baseDirTitle: "仓库基地址",
   baseDirDesc:
     "同步时从源仓库拉取到基地址下的本地中转目录（按仓库名建目录），更新 LFS 与 submodule 后推送到目标仓库。点击下方按钮选择目录（以完整路径保存）。",
@@ -197,6 +202,11 @@ const en = {
   toolSetBaseDir: "Change the local repository base directory (staging directory)",
   settingsTitle: "Settings",
   langDesc: "Switch the interface language, takes effect immediately",
+  appearanceTitle: "Appearance",
+  themeDesc: "Follow the system light/dark appearance, or force one manually",
+  themeSystem: "System",
+  themeLight: "Light",
+  themeDark: "Dark",
   baseDirTitle: "Repository base directory",
   baseDirDesc:
     "During sync, repositories are pulled from the source into a staging directory under the base directory (one folder per repository name); LFS and submodules are updated, then everything is pushed to the target repository. Pick a folder with the button below (stored as a full path).",

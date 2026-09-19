@@ -4,6 +4,19 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Git Repo Sync</title>
+    <script>
+      // 首帧前应用主题（与 src/lib/theme.ts 逻辑一致），避免深色系统下启动白屏闪烁
+      (function () {
+        try {
+          var p = localStorage.getItem("grs_theme");
+          if (p !== "light" && p !== "dark") p = "system";
+          var dark =
+            p === "dark" ||
+            (p === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+          if (dark) document.documentElement.classList.add("dark");
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

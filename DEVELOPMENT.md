@@ -23,7 +23,7 @@ Git Repo Sync 是一款跨平台的 Git 仓库同步桌面软件，用于将仓�
 | 文档                                          | 内容                                                                       |
 | --------------------------------------------- | -------------------------------------------------------------------------- |
 | [environment.md](./references/environment.md) | 环境准备与常用命令：基础依赖、各平台系统依赖、终端编码（GBK 与 UTF-8）处理 |
-| [features.md](./references/features.md)       | 功能设计：用户登录、同步仓库、日志、MCP、设置、多语言                      |
+| [features.md](./references/features.md)       | 功能设计：用户登录、同步仓库、日志、MCP、设置、多语言、外观主题（深色模式）  |
 | [release.md](./references/release.md)         | 版本号规则与发布流程：version.ps1 / tag.ps1、GitHub Releases、beta 版本    |
 
 ## 4. 快速开始
@@ -40,6 +40,13 @@ Git Repo Sync 是一款跨平台的 Git 仓库同步桌面软件，用于将仓�
 pnpm install            # 安装前端依赖
 pnpm tauri dev          # 以开发模式启动（前端热重载 + Rust 增量编译）
 pnpm tauri build        # 构建发布版安装包
+```
+
+测试命令（本地运行）：
+
+```bash
+pnpm test                                # 前端单元测试（vitest）
+cd src-tauri && cargo test               # 后端单元测试
 ```
 
 环境搭建与更多命令见 [references/environment.md](./references/environment.md)。
@@ -61,12 +68,13 @@ pnpm tauri build        # 构建发布版安装包
 │   ├── features.md      # 功能设计与实现说明
 │   └── release.md       # 版本号规则与发布流程
 ├── src/                 # 前端代码（React + TypeScript）
-│   ├── components/      # 页面组件与 shadcn/ui 风格基础组件（ui/）
-│   ├── lib/             # Tauri 命令封装（api.ts）、类型、工具函数
+│   ├── components/      # 页面组件、弹窗组件与 shadcn/ui 风格基础组件（ui/）
+│   ├── i18n/            # 前端语言词典（zh.ts / en.ts，i18n.ts 负责初始化）
+│   ├── lib/             # Tauri 命令封装（api.ts）、类型、主题（theme.ts）、工具函数
 │   └── main.tsx
 ├── src-tauri/           # Rust 后端
 │   ├── locales/         # Fluent 语言包（zh-CN / en-US）
-│   ├── src/             # main / state / lang / auth / repos / settings / mcp
+│   ├── src/             # main / state / lang / auth / repos / discover / sync / git / mcp（+ mcp/tools）/ settings
 │   ├── Cargo.toml
 │   └── tauri.conf.json
 ├── index.html

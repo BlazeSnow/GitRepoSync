@@ -44,6 +44,7 @@
 - 📦 **LFS 与 submodule 支持**：完整备份大文件与子模块（未安装 git-lfs 时自动降级并提示）
 - 📜 **操作日志**：登录、同步、配置变更等全部操作入库 SQLite，按时间倒序可查
 - 🌐 **中英双语**：设置页可切换界面语言
+- 🌗 **深色模式**：跟随系统深浅色自动切换，也可在设置页手动指定浅色 / 深色
 - 🤖 **Agent 接入**：内置 MCP 服务，Agent 可直接管理仓库并触发同步
 
 ## Agent（MCP）接入
@@ -65,7 +66,7 @@
 }
 ```
 
-可用工具：`list_repos`、`add_repo`、`remove_repo`、`sync_repo`、`get_sync_status`、`get_base_dir`、`set_base_dir`。
+可用工具：`list_repos`、`discover_repos`、`add_repo`、`update_repo`、`remove_repo`、`sync_repo`、`sync_repos`、`get_sync_status`、`list_logs`、`get_base_dir`、`set_base_dir`。其中 `add_repo` 按仓库名幂等（同名仓库已存在时合并目标而非新建），`remove_repo` 为软删除（隐藏条目并清空目标，不影响基地址内的目录），`sync_repos` 支持 `ids` 列表或 `days` 范围（0=全部 / N 天未同步，与界面一致）批量触发同步，`list_logs` 可查询全部操作历史。
 
 ## 命令行
 

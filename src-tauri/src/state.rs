@@ -1,4 +1,4 @@
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
@@ -111,6 +111,9 @@ impl AppState {
         let conn = Connection::open(&db_path).map_err(|e| format!("打开数据库失败: {e}"))?;
         conn.pragma_update(None, "journal_mode", "WAL")
             .map_err(|e| format!("设置 WAL 失败: {e}"))?;
+        // 多进程共用数据库（GUI 与 mcp 子命令）：写冲突时等待而非立即报错
+        conn.busy_timeout(std::time::Duration::from_secs(5))
+            .map_err(|e| format!("设置 busy_timeout 失败: {e}"))?;
         Self::ensure_schema(&conn);
 
         let state = Self {
@@ -177,6 +180,47 @@ impl AppState {
             [],
         );
         let _ = conn.execute("UPDATE repos SET target = '' WHERE target != ''", []);
+
+        // 旧库清理：同名重复仓库去重（历史版本 add_repo 不查重产生）。
+        // name 同时是中转目录名与自动发现的身份，保留可见行中最早创建的一行
+        //（全隐藏时保留最早一行），重复行的 targets 并入保留行后删除
+        let dup_names: Vec<String> = {
+            match conn.prepare("SELECT name FROM repos GROUP BY name HAVING COUNT(*) > 1") {
+                Ok(mut stmt) => stmt
+                    .query_map([], |r| r.get::<_, String>(0))
+                    .map(|rows| rows.filter_map(Result::ok).collect::<Vec<_>>())
+                    .unwrap_or_default(),
+                Err(_) => Vec::new(),
+            }
+        };
+        for name in dup_names {
+            let keep_id: Option<String> = conn
+                .query_row(
+                    "SELECT id FROM repos WHERE name = ?1 ORDER BY hidden ASC, id ASC LIMIT 1",
+                    params![name],
+                    |r| r.get(0),
+                )
+                .ok();
+            let Some(keep_id) = keep_id else { continue };
+            let _ = conn.execute(
+                "INSERT OR IGNORE INTO sync_targets (repo_id, remote, url)
+                 SELECT ?1, remote, url FROM sync_targets
+                 WHERE repo_id IN (SELECT id FROM repos WHERE name = ?2 AND id != ?1)",
+                params![keep_id, name],
+            );
+            let _ = conn.execute(
+                "DELETE FROM sync_targets WHERE repo_id IN
+                 (SELECT id FROM repos WHERE name = ?1 AND id != ?2)",
+                params![name, keep_id],
+            );
+            let _ = conn.execute(
+                "DELETE FROM repos WHERE name = ?1 AND id != ?2",
+                params![name, keep_id],
+            );
+        }
+        // name 唯一索引：与上方去重配合，杜绝再次产生重复条目
+        //（去重后仍失败只影响本次索引创建，`let _` 不阻断启动）
+        let _ = conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_repos_name ON repos(name)", []);
     }
 
     /// 首次启动初始化：admin/admin123 用户、默认基地址、MCP APIKEY
@@ -264,6 +308,22 @@ impl AppState {
     }
 }
 
+/// repos 表查询列（与 repo_from_row 的读取列序一一对应）
+pub(crate) const REPO_COLS: &str = "id, name, source, target, last_synced, last_status, last_message";
+
+/// 从 repos 表行构造 Repo（配合 REPO_COLS 使用；target 列已废弃不读）
+pub(crate) fn repo_from_row(row: &rusqlite::Row) -> rusqlite::Result<Repo> {
+    Ok(Repo {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        source: row.get(2)?,
+        last_synced: row.get(4)?,
+        last_status: row.get(5)?,
+        last_message: row.get(6)?,
+        targets: Vec::new(),
+    })
+}
+
 /// 为仓库列表附加备份目标状态
 pub fn attach_targets(conn: &Connection, repos: &mut [Repo]) {
     for r in repos.iter_mut() {
@@ -301,5 +361,97 @@ pub fn attach_targets(conn: &Connection, repos: &mut [Repo]) {
         if let Some(ts) = map.get(&r.id) {
             r.targets = ts.clone();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// ~ 开头的输入展开为完整路径，其余去空白后原样保存
+    #[test]
+    fn normalize_base_dir_expands_tilde() {
+        let home = dirs::home_dir().expect("测试环境无用户目录");
+        assert_eq!(normalize_base_dir("~"), home.to_string_lossy());
+        assert_eq!(
+            normalize_base_dir("~/repo/sub"),
+            home.join("repo/sub").to_string_lossy()
+        );
+        assert_eq!(
+            normalize_base_dir("~\\repo"),
+            home.join("repo").to_string_lossy(),
+            "Windows 风格 ~\\ 同样展开"
+        );
+        assert_eq!(normalize_base_dir("  /tmp/x  "), "/tmp/x", "去首尾空白");
+        assert_eq!(normalize_base_dir("C:\\repo"), "C:\\repo", "普通路径原样");
+    }
+
+    /// 旧库同名重复行在打开时自动去重：保留可见行中最早创建的，targets 并入保留行
+    #[test]
+    fn duplicate_names_are_merged_on_open() {
+        let root =
+            std::env::temp_dir().join(format!("grs-dedup-test-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&root).unwrap();
+        let db = root.join("app.db");
+        // 手工构造旧库（重复行场景）：alpha 自动发现行（无目标）+ 旧版 add_repo 误建的同名行（有目标）
+        {
+            let conn = Connection::open(&db).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE repos (
+                    id TEXT PRIMARY KEY, name TEXT NOT NULL, source TEXT NOT NULL,
+                    target TEXT NOT NULL DEFAULT '', last_synced INTEGER,
+                    last_status TEXT NOT NULL DEFAULT 'idle', last_message TEXT,
+                    hidden INTEGER NOT NULL DEFAULT 0);
+                CREATE TABLE sync_targets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, repo_id TEXT NOT NULL,
+                    remote TEXT NOT NULL, url TEXT NOT NULL, last_synced INTEGER,
+                    last_status TEXT NOT NULL DEFAULT 'idle', last_message TEXT,
+                    UNIQUE(repo_id, remote));",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO repos (id, name, source) VALUES ('a1', 'alpha', 'https://src/alpha.git')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO repos (id, name, source) VALUES ('a2', 'alpha', 'https://src/alpha.git')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO sync_targets (repo_id, remote, url) VALUES ('a2', 'gitlab', 'https://gl/alpha.git')",
+                [],
+            )
+            .unwrap();
+        }
+        let state = AppState::open(db.clone()).unwrap();
+        {
+            let conn = lock(&state.conn);
+            let n: i64 = conn
+                .query_row("SELECT COUNT(*) FROM repos WHERE name = 'alpha'", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(n, 1, "同名重复行去重为一条");
+            let keep: String = conn
+                .query_row("SELECT id FROM repos WHERE name = 'alpha'", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(keep, "a1", "保留可见行中最早创建的");
+            let targets: i64 = conn
+                .query_row("SELECT COUNT(*) FROM sync_targets WHERE repo_id = 'a1'", [], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            assert_eq!(targets, 1, "重复行的目标并入保留行");
+        }
+        // 幂等：再次打开不报错、不丢数据
+        drop(state);
+        let state2 = AppState::open(db).unwrap();
+        let conn = lock(&state2.conn);
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM repos WHERE name = 'alpha'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1);
+        drop(conn);
+        std::fs::remove_dir_all(&root).ok();
     }
 }

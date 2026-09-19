@@ -18,6 +18,7 @@ log-change-password = 修改密码
 
 # ---------- 仓库 ----------
 repo-fields-empty = 仓库名称、源地址、目标地址均不能为空
+repo-name-exists = 仓库名「{$name}」已存在
 repo-not-found = 仓库不存在
 repo-syncing = 该仓库正在同步，请先停止同步
 log-repo-added = 添加仓库「{$name}」
@@ -58,23 +59,39 @@ mcp-unauthorized = unauthorized: APIKEY 不正确
 mcp-parse-error = parse error
 mcp-method-not-found = method not found: {$method}
 mcp-unknown-tool = unknown tool: {$tool}
+mcp-internal-error = 内部错误：请求处理异常
 mcp-spawn-internal = 内部错误
 log-mcp-repo-added = 通过 MCP 添加仓库「{$name}」
-log-mcp-repo-deleted = 通过 MCP 删除仓库
+log-mcp-repo-updated = 通过 MCP 更新仓库「{$name}」
+log-mcp-repo-deleted = 通过 MCP 移除仓库「{$name}」
 log-mcp-sync = 通过 MCP 触发同步
+log-mcp-sync-batch = 通过 MCP 批量触发同步（{$count} 个仓库）
+sync-repos-no-selector = 需要提供 ids（仓库 ID 列表）或 days（同步范围天数）之一
+sync-ids-empty = ids 不能为空
 log-mcp-base-dir-changed = 通过 MCP 修改仓库基地址为 {$dir}
 
 # ---------- MCP 工具描述 ----------
 tool-list-repos = 列出所有已配置的同步仓库及其最近一次同步状态
-tool-add-repo = 新增一个同步仓库：从源仓库拉取到本地基地址作为中转站（更新 LFS 与 submodule），再推送到目标仓库地址
+tool-discover-repos = 扫描基地址（中转站目录）内的一级子目录，把其中的 git 仓库登记进列表：origin 远端作为源地址、其余全部远端作为备份目标；返回登记后的完整仓库列表
+tool-add-repo = 新增或更新同步仓库（按名称幂等）：同名仓库已存在时更新源地址、合并目标并重新登记，不会产生重复条目；同步时从源仓库拉取到本地基地址作为中转站（更新 LFS 与 submodule），再推送到目标仓库地址
 tool-add-repo-name = 仓库名称（同时是本地基地址下的目录名）
 tool-add-repo-source = 源地址（Git 仓库 URL）
-tool-add-repo-target = 目标仓库地址（Git 仓库 URL）
-tool-remove-repo = 删除指定的同步仓库
+tool-add-repo-target = 目标仓库地址（Git 仓库 URL，等价于 targets 单元素简写）
+tool-update-repo = 更新指定同步仓库的配置：可修改名称与源地址；提供 targets 时整体替换目标列表（仅补充目标请用 add_repo，其为合并语义）
+tool-update-repo-id = 仓库 ID
+tool-update-repo-name = 新仓库名称（可选）
+tool-update-repo-source = 新源地址（可选）
+tool-update-repo-targets = 完整备份目标列表（可选；提供时替换全部现有目标）
+tool-remove-repo = 移除指定同步仓库（软删除）：从列表隐藏并清空其目标配置；基地址内目录不被删除，也不会被自动发现重新登记
 tool-remove-repo-id = 仓库 ID
 tool-sync-repo = 立即开始同步指定仓库（异步执行，可用 get_sync_status 查询进度）
 tool-sync-repo-id = 仓库 ID
+tool-sync-repos = 批量触发同步：提供 ids 按列表同步，或提供 days 按范围同步（0=全部仓库，N=最近 N 天未同步，含从未同步，与界面范围一致）；未配置（缺源地址或目标）的仓库自动跳过，两者都提供时优先 ids。异步执行，可用 get_sync_status 查询进度
+tool-sync-repos-ids = 仓库 ID 列表（可选）
+tool-sync-repos-days = 同步范围天数（可选；0=全部，N=最近 N 天未同步，含从未同步）
 tool-get-sync-status = 查询所有仓库的最近同步状态
+tool-list-logs = 按时间倒序列出软件操作日志（操作、操作人、操作时间）
+tool-list-logs-limit = 返回条数上限（可选，默认 200，最大 1000）
 tool-get-base-dir = 查询本地仓库基地址（中转站目录）
 tool-set-base-dir = 修改本地仓库基地址（中转站目录）
 tool-set-base-dir-base-dir = 基地址完整路径

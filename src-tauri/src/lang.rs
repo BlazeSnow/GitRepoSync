@@ -101,3 +101,39 @@ pub fn tr_a(lang: Lang, key: &str, args: &[(&str, &str)]) -> String {
         .collect();
     crate::LOCALES.lookup_with_args(&lang.id(), key, &args)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 语言标签解析：zh* 归中文，其余非空值归英文，空值交调用方定默认
+    #[test]
+    fn parse_tag_maps_locales() {
+        assert_eq!(Lang::parse_tag(Some("zh-CN")), Some(Lang::Zh));
+        assert_eq!(Lang::parse_tag(Some("zh")), Some(Lang::Zh));
+        assert_eq!(Lang::parse_tag(Some("en-US")), Some(Lang::En));
+        assert_eq!(Lang::parse_tag(Some(" fr ")), Some(Lang::En), "非 zh 一律视为英文");
+        assert_eq!(Lang::parse_tag(Some("")), None);
+        assert_eq!(Lang::parse_tag(Some("   ")), None);
+        assert_eq!(Lang::parse_tag(None), None);
+    }
+
+    #[test]
+    fn sep_follows_language() {
+        assert_eq!(Lang::Zh.sep(), "；");
+        assert_eq!(Lang::En.sep(), "; ");
+    }
+
+    /// 文案查询：分语言取值、参数替换、缺失键双语行为一致
+    #[test]
+    fn tr_lookups_params_and_fallback() {
+        assert_eq!(tr(Lang::Zh, "repo-not-found"), "仓库不存在");
+        assert_eq!(tr(Lang::En, "repo-not-found"), "Repository not found");
+        assert!(
+            tr_a(Lang::Zh, "log-repo-added", &[("name", "demo")]).contains("demo"),
+            "参数被替换进文案"
+        );
+        // 双语言包均缺失的键：En 回落 zh-CN，两者行为一致
+        assert_eq!(tr(Lang::En, "no-such-key"), tr(Lang::Zh, "no-such-key"));
+    }
+}

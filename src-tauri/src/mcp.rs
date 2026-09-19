@@ -1,13 +1,14 @@
+//! MCP stdio 协议层：JSON-RPC 2.0 主循环、鉴权、panic 隔离与诊断日志。
+//! 工具定义与分发见 mcp/tools.rs；由 main.rs 的 `mcp` 子命令进入。
+
+mod tools;
+
 use crate::lang::{tr, tr_a, Lang};
-use crate::repos;
-use crate::state::{lock, normalize_base_dir, AppState, Repo};
-use rusqlite::params;
+use crate::state::AppState;
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 use std::sync::Arc;
-use uuid::Uuid;
-
-const OPERATOR: &str = "mcp";
+use tools::{tools_call, tools_list};
 
 /// MCP stdio 主循环：逐行读取 stdin 的 JSON-RPC 2.0 消息并应答（通知类消息不应答）。
 /// 鉴权：客户端须通过环境变量 GIT_REPO_SYNC_API_KEY 或 --api-key 参数提供 APIKEY，
@@ -21,6 +22,10 @@ pub fn run_stdio(state: Arc<AppState>, provided_key: Option<String>) {
             && provided_key.as_deref() == Some(expected.as_str())
     };
     let mut session_lang = Lang::from_env();
+    eprintln!(
+        "[mcp] stdio 服务已启动（APIKEY 鉴权{}）",
+        if authorized { "通过" } else { "未通过" }
+    );
     let stdin = std::io::stdin();
     let mut out = std::io::stdout().lock();
     loop {
@@ -45,8 +50,49 @@ pub fn run_stdio(state: Arc<AppState>, provided_key: Option<String>) {
     }
 }
 
-/// 返回 None 表示无需应答（通知类消息）
+/// 返回 None 表示无需应答（通知类消息）。
+/// 外层：单请求 panic 隔离（应答内部错误、进程存活）与 stderr 诊断日志——
+/// stdio 模式下 stderr 不参与协议，客户端可见，用于排查断连类问题。
 fn handle_line(
+    state: &Arc<AppState>,
+    authorized: bool,
+    session_lang: &mut Lang,
+    line: &str,
+) -> Option<String> {
+    // 通知类消息不应答、不计入诊断日志
+    let method = serde_json::from_str::<Value>(line)
+        .ok()
+        .and_then(|v| v.get("method").and_then(|m| m.as_str()).map(str::to_string));
+    if method.as_deref().is_some_and(|m| m.starts_with("notifications/")) {
+        return handle_line_inner(state, authorized, session_lang, line);
+    }
+    let started = std::time::Instant::now();
+    let response = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        handle_line_inner(state, authorized, session_lang, line)
+    }))
+    .unwrap_or_else(|p| {
+        let msg = if let Some(s) = p.downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = p.downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "unknown panic".to_string()
+        };
+        eprintln!("[mcp] 请求处理 panic：{msg}");
+        Some(
+            rpc_error(&Value::Null, -32603, &tr(*session_lang, "mcp-internal-error"))
+                .to_string(),
+        )
+    });
+    eprintln!(
+        "[mcp] {}（{} ms）",
+        method.as_deref().unwrap_or("?"),
+        started.elapsed().as_millis()
+    );
+    response
+}
+
+fn handle_line_inner(
     state: &Arc<AppState>,
     authorized: bool,
     session_lang: &mut Lang,
@@ -114,304 +160,78 @@ fn rpc_error(id: &Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }
 
-/// 工具描述按会话语言返回；工具名称为协议契约，不翻译
-fn tools_list(lang: Lang) -> Value {
-    json!({
-        "tools": [
-            {
-                "name": "list_repos",
-                "description": tr(lang, "tool-list-repos"),
-                "inputSchema": { "type": "object", "properties": {} }
-            },
-            {
-                "name": "add_repo",
-                "description": tr(lang, "tool-add-repo"),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "name": { "type": "string", "description": tr(lang, "tool-add-repo-name") },
-                        "source": { "type": "string", "description": tr(lang, "tool-add-repo-source") },
-                        "target": { "type": "string", "description": tr(lang, "tool-add-repo-target") },
-                        "targets": {
-                            "type": "array",
-                            "description": tr(lang, "tool-add-repo-targets"),
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "remote": { "type": "string" },
-                                    "url": { "type": "string" }
-                                }
-                            }
-                        }
-                    },
-                    "required": ["name", "source", "target"]
-                }
-            },
-            {
-                "name": "remove_repo",
-                "description": tr(lang, "tool-remove-repo"),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": { "id": { "type": "string", "description": tr(lang, "tool-remove-repo-id") } },
-                    "required": ["id"]
-                }
-            },
-            {
-                "name": "sync_repo",
-                "description": tr(lang, "tool-sync-repo"),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": { "id": { "type": "string", "description": tr(lang, "tool-sync-repo-id") } },
-                    "required": ["id"]
-                }
-            },
-            {
-                "name": "get_sync_status",
-                "description": tr(lang, "tool-get-sync-status"),
-                "inputSchema": { "type": "object", "properties": {} }
-            },
-            {
-                "name": "get_base_dir",
-                "description": tr(lang, "tool-get-base-dir"),
-                "inputSchema": { "type": "object", "properties": {} }
-            },
-            {
-                "name": "set_base_dir",
-                "description": tr(lang, "tool-set-base-dir"),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": { "base_dir": { "type": "string", "description": tr(lang, "tool-set-base-dir-base-dir") } },
-                    "required": ["base_dir"]
-                }
-            }
-        ]
-    })
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lang::Lang;
+    use crate::state::AppState;
 
-fn repo_from_row(row: &rusqlite::Row) -> rusqlite::Result<Repo> {
-    Ok(Repo {
-        id: row.get(0)?,
-        name: row.get(1)?,
-        source: row.get(2)?,
-        last_synced: row.get(4)?,
-        last_status: row.get(5)?,
-        last_message: row.get(6)?,
-        targets: Vec::new(),
-    })
-}
+    fn open_state() -> (Arc<AppState>, std::path::PathBuf) {
+        let root =
+            std::env::temp_dir().join(format!("grs-mcp-test-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&root).unwrap();
+        (
+            Arc::new(AppState::open(root.join("app.db")).unwrap()),
+            root,
+        )
+    }
 
-const REPO_COLS: &str = "id, name, source, target, last_synced, last_status, last_message";
-
-fn list_repos_value(state: &AppState) -> Result<Value, String> {
-    let conn = lock(&state.conn);
-    let mut stmt = conn
-        .prepare(&format!(
-            "SELECT {REPO_COLS} FROM repos WHERE hidden = 0 ORDER BY name"
-        ))
-        .map_err(|e| e.to_string())?;
-    let mut repos = stmt
-        .query_map([], repo_from_row)
-        .map_err(|e| e.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
-    crate::state::attach_targets(&conn, &mut repos);
-    serde_json::to_value(repos).map_err(|e| e.to_string())
-}
-
-fn tools_call(state: &Arc<AppState>, lang: Lang, params: &Value) -> Result<Value, (i64, String)> {
-    let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
-    let args = params.get("arguments").cloned().unwrap_or(json!({}));
-
-    let result: Result<Value, String> = match name {
-        "list_repos" | "get_sync_status" => list_repos_value(state),
-        "add_repo" => {
-            let field = |k: &str| {
-                args.get(k)
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .trim()
-                    .to_string()
-            };
-            let (rname, source) = (field("name"), field("source"));
-            if rname.is_empty() || source.is_empty() {
-                return Err((-32602, tr(lang, "repo-fields-empty")));
-            }
-            // 目标：优先 targets 数组 [{remote,url}]；兼容单 target 字符串（远端名 backup）
-            let mut targets: Vec<(String, String)> = args
-                .get("targets")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|t| {
-                            let remote = t.get("remote")?.as_str()?.trim().to_string();
-                            let url = t.get("url")?.as_str()?.trim().to_string();
-                            (!remote.is_empty() && !url.is_empty()).then_some((remote, url))
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            if targets.is_empty() {
-                if let Some(t) = args.get("target").and_then(|v| v.as_str()) {
-                    let t = t.trim();
-                    if !t.is_empty() {
-                        targets.push(("backup".into(), t.to_string()));
-                    }
-                }
-            }
-            if targets.is_empty() {
-                return Err((-32602, tr(lang, "sync-no-targets")));
-            }
-            let mut repo = Repo {
-                id: Uuid::new_v4().to_string(),
-                name: rname.clone(),
-                source,
-                last_synced: None,
-                last_status: "idle".into(),
-                last_message: None,
-                targets: Vec::new(),
-            };
-            {
-                let conn = lock(&state.conn);
-                conn.execute(
-                    "INSERT INTO repos (id, name, source, target, last_synced, last_status, last_message)
-                     VALUES (?1, ?2, ?3, '', ?4, ?5, ?6)",
-                    params![
-                        repo.id,
-                        repo.name,
-                        repo.source,
-                        repo.last_synced,
-                        repo.last_status,
-                        repo.last_message
-                    ],
-                )
-                .map_err(|e| (-32602, e.to_string()))?;
-                for (remote, url) in &targets {
-                    conn.execute(
-                        "INSERT INTO sync_targets (repo_id, remote, url) VALUES (?1, ?2, ?3)",
-                        params![repo.id, remote, url],
-                    )
-                    .map_err(|e| (-32602, e.to_string()))?;
-                }
-            }
-            repo.targets = targets
-                .iter()
-                .map(|(remote, url)| crate::state::TargetState {
-                    remote: remote.clone(),
-                    url: url.clone(),
-                    last_status: "idle".into(),
-                    last_message: None,
-                    last_synced: None,
-                })
-                .collect();
-            state.add_log(
-                &tr_a(lang, "log-mcp-repo-added", &[("name", &rname)]),
-                OPERATOR,
-            );
-            serde_json::to_value(repo).map_err(|e| e.to_string())
-        }
-        "remove_repo" => {
-            let id = args
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            if lock(&state.syncing).contains(&id) {
-                return Err((-32602, tr(lang, "repo-syncing")));
-            }
-            let deleted = {
-                let conn = lock(&state.conn);
-                conn.execute("UPDATE repos SET hidden = 1 WHERE id = ?1", params![id])
-                    .map_err(|e| (-32602, e.to_string()))?;
-                conn.execute("DELETE FROM sync_targets WHERE repo_id = ?1", params![id])
-                    .map_err(|e| (-32602, e.to_string()))?
-            };
-            if deleted == 0 {
-                return Err((-32602, tr(lang, "repo-not-found")));
-            }
-            state.add_log(&tr(lang, "log-mcp-repo-deleted"), OPERATOR);
-            Ok(json!({ "deleted": true }))
-        }
-        "sync_repo" => {
-            let id = args
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let (exists, source, target_n) = {
-                let conn = lock(&state.conn);
-                let source: String = conn
-                    .query_row(
-                        "SELECT source FROM repos WHERE id = ?1",
-                        params![id],
-                        |r| r.get(0),
-                    )
-                    .unwrap_or_default();
-                let n: i64 = conn
-                    .query_row(
-                        "SELECT COUNT(*) FROM sync_targets WHERE repo_id = ?1",
-                        params![id],
-                        |r| r.get(0),
-                    )
-                    .unwrap_or(0);
-                let exists: i64 = conn
-                    .query_row(
-                        "SELECT COUNT(*) FROM repos WHERE id = ?1",
-                        params![id],
-                        |r| r.get(0),
-                    )
-                    .unwrap_or(0);
-                (exists > 0, source, n)
-            };
-            if !exists {
-                return Err((-32602, tr(lang, "repo-not-found")));
-            }
-            if source.is_empty() {
-                return Err((-32602, tr(lang, "sync-no-source")));
-            }
-            if target_n == 0 {
-                return Err((-32602, tr(lang, "sync-no-targets")));
-            }
-            let started = repos::spawn_sync(state.clone(), None, id, OPERATOR.to_string(), lang);
-            state.add_log(&tr(lang, "log-mcp-sync"), OPERATOR);
-            Ok(json!({ "started": started }))
-        }
-        "get_base_dir" => Ok(json!({ "base_dir": state
-            .get_setting("base_dir")
-            .unwrap_or_else(crate::state::default_base_dir) })),
-        "set_base_dir" => {
-            let base_dir = args
-                .get("base_dir")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            if base_dir.is_empty() {
-                return Err((-32602, tr(lang, "base-dir-empty")));
-            }
-            let base_dir = normalize_base_dir(&base_dir);
-            state.set_setting("base_dir", &base_dir);
-            state.add_log(
-                &tr_a(lang, "log-mcp-base-dir-changed", &[("dir", &base_dir)]),
-                OPERATOR,
-            );
-            Ok(json!({ "base_dir": base_dir }))
-        }
-        _ => {
-            return Err((
-                -32602,
-                tr_a(lang, "mcp-unknown-tool", &[("tool", name)]),
-            ))
-        }
-    };
-
-    match result {
-        Ok(v) => Ok(json!({
-            "content": [ { "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() } ],
-            "isError": false
-        })),
-        Err(e) => Ok(json!({
-            "content": [ { "type": "text", "text": e } ],
-            "isError": true
-        })),
+    /// 协议层：通知不应答、鉴权拦截、解析错误、initialize 版本与语言切换、未知方法、ping
+    #[test]
+    fn handle_line_protocol_behaviour() {
+        let (state, root) = open_state();
+        let mut lang = Lang::Zh;
+        // 通知类消息不应答
+        assert_eq!(
+            handle_line(
+                &state,
+                true,
+                &mut lang,
+                r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#
+            ),
+            None
+        );
+        // 鉴权未通过：所有请求被拒
+        let resp = handle_line(
+            &state,
+            false,
+            &mut lang,
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
+        )
+        .unwrap();
+        assert!(resp.contains("-32001"));
+        // 解析错误
+        let resp = handle_line(&state, true, &mut lang, "not-json").unwrap();
+        assert!(resp.contains("-32700"));
+        // initialize：返回协议版本，locale 切换会话语言
+        let resp = handle_line(
+            &state,
+            true,
+            &mut lang,
+            r#"{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"locale":"en-US"}}"#,
+        )
+        .unwrap();
+        assert!(resp.contains("protocolVersion"));
+        assert_eq!(lang, Lang::En);
+        // 会话语言影响后续消息（method not found 为英文文案）
+        let resp = handle_line(
+            &state,
+            true,
+            &mut lang,
+            r#"{"jsonrpc":"2.0","id":3,"method":"nope"}"#,
+        )
+        .unwrap();
+        assert!(resp.contains("-32601"));
+        assert!(resp.contains("method not found"));
+        // ping 应答 result
+        let resp = handle_line(
+            &state,
+            true,
+            &mut lang,
+            r#"{"jsonrpc":"2.0","id":4,"method":"ping"}"#,
+        )
+        .unwrap();
+        assert!(resp.contains("\"result\""));
+        std::fs::remove_dir_all(&root).ok();
     }
 }

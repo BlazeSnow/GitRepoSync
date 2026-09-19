@@ -4,11 +4,14 @@
 fluent_i18n::i18n!("locales", fallback = "zh-CN");
 
 mod auth;
+mod discover;
+mod git;
 mod lang;
 mod mcp;
 mod repos;
 mod settings;
 mod state;
+mod sync;
 
 use state::AppState;
 use std::sync::Arc;
@@ -63,8 +66,8 @@ fn main() {
             repos::discover_repos,
             repos::save_repo,
             repos::delete_repo,
-            repos::start_sync,
-            repos::stop_sync,
+            sync::start_sync,
+            sync::stop_sync,
             settings::get_app_info,
             settings::get_base_dir,
             settings::set_base_dir,
@@ -158,9 +161,19 @@ fn run_mcp_stdio(args: &[String]) {
 
     // 与 Tauri 运行时的 app_data_dir 保持一致：系统数据目录 + 应用标识符
     let data_dir = dirs::data_dir()
-        .expect("无法定位系统数据目录")
+        .unwrap_or_else(|| {
+            eprintln!("Git Repo Sync MCP 启动失败：无法定位系统数据目录");
+            std::process::exit(1);
+        })
         .join("com.blazesnow.gitreposync");
-    let state = Arc::new(AppState::open(data_dir.join("app.db")).expect("初始化数据库失败"));
+    // 启动失败不 panic：stderr 说明原因后以非零码退出，客户端可见（GUI 进程写库忙等场景）
+    let state = match AppState::open(data_dir.join("app.db")) {
+        Ok(s) => Arc::new(s),
+        Err(e) => {
+            eprintln!("Git Repo Sync MCP 启动失败：{e}");
+            std::process::exit(1);
+        }
+    };
     mcp::run_stdio(state.clone(), provided);
     // stdin 已关闭（客户端断开）：等待在途同步完成后再退出，避免中断同步
     state.wait_syncs_idle();

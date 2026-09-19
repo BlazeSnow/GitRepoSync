@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import type { PageKey } from "@/lib/types";
+import { applyTheme, getThemePref, watchSystemTheme } from "@/lib/theme";
 import { Layout } from "@/components/Layout";
 import { Login } from "@/components/Login";
 import { LogsPage } from "@/components/LogsPage";
@@ -18,6 +19,12 @@ export default function App() {
   const [checking, setChecking] = useState(() => !!localStorage.getItem(TOKEN_KEY));
   const [page, setPage] = useState<PageKey>("sync");
   const [version, setVersion] = useState("…");
+
+  // 应用主题偏好并监听系统深浅色变化（跟随系统时即时切换）
+  useEffect(() => {
+    applyTheme(getThemePref());
+    return watchSystemTheme();
+  }, []);
 
   useEffect(() => {
     if (!token) return;

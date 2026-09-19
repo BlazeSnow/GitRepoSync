@@ -207,15 +207,17 @@ export function SyncPage({ token }: { token: string }) {
     const t = repo.targets.find((x) => x.remote === remote);
     if (!t) return <span className="text-muted-foreground/40">—</span>;
     const badge = statusBadge[t.lastStatus] ?? statusBadge.idle;
+    const tip = [t.url, t.lastMessage].filter(Boolean).join(" | ");
     return (
-      <span title={t.lastMessage ?? undefined} className="inline-flex">
+      <div className="flex min-w-0 items-center gap-1.5" title={tip || undefined}>
+        <span className="min-w-0 flex-1 truncate font-mono text-xs">{t.url}</span>
         <Badge
           variant={badge.variant}
-          className={t.lastStatus === "running" ? "animate-pulse" : ""}
+          className={`shrink-0 ${t.lastStatus === "running" ? "animate-pulse" : ""}`}
         >
           {badge.label}
         </Badge>
-      </span>
+      </div>
     );
   };
 
@@ -259,7 +261,7 @@ export function SyncPage({ token }: { token: string }) {
               <TableHead className="sticky top-0 z-10 w-44 bg-card">{t("colRepo")}</TableHead>
               <TableHead className="sticky top-0 z-10 max-w-56 bg-card">{t("colSource")}</TableHead>
               {targetRemotes.map((remote) => (
-                <TableHead key={remote} className="sticky top-0 z-10 min-w-24 bg-card">
+                <TableHead key={remote} className="sticky top-0 z-10 min-w-56 bg-card">
                   <span className="font-mono text-xs">{remote}</span>
                 </TableHead>
               ))}
@@ -293,7 +295,9 @@ export function SyncPage({ token }: { token: string }) {
                       {repo.source || t("notConfigured")}
                     </TableCell>
                     {targetRemotes.map((remote) => (
-                      <TableCell key={remote}>{targetCell(repo, remote)}</TableCell>
+                      <TableCell key={remote} className="max-w-64">
+                        {targetCell(repo, remote)}
+                      </TableCell>
                     ))}
                     <TableCell>
                       <Badge

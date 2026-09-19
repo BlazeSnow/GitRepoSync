@@ -80,6 +80,10 @@ fn main() {
 /// Windows 下 release 构建为 GUI 子系统（无控制台）：
 /// - 被 Agent 以管道/重定向捕获 stdout 时，标准句柄已有效，直接输出即可
 /// - 在交互 shell 中直接运行时附加父控制台并重新绑定标准句柄，使输出可见
+// 非 Windows 平台：终端子系统的进程天然有控制台，stdout 直接可用，无需附加
+#[cfg(not(windows))]
+fn ensure_console_for_cli() {}
+
 #[cfg(windows)]
 fn ensure_console_for_cli() {
     use windows_sys::Win32::Foundation::{GENERIC_WRITE, INVALID_HANDLE_VALUE};

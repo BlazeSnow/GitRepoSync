@@ -308,6 +308,22 @@ impl AppState {
     }
 }
 
+/// repos 表查询列（与 repo_from_row 的读取列序一一对应）
+pub(crate) const REPO_COLS: &str = "id, name, source, target, last_synced, last_status, last_message";
+
+/// 从 repos 表行构造 Repo（配合 REPO_COLS 使用；target 列已废弃不读）
+pub(crate) fn repo_from_row(row: &rusqlite::Row) -> rusqlite::Result<Repo> {
+    Ok(Repo {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        source: row.get(2)?,
+        last_synced: row.get(4)?,
+        last_status: row.get(5)?,
+        last_message: row.get(6)?,
+        targets: Vec::new(),
+    })
+}
+
 /// 为仓库列表附加备份目标状态
 pub fn attach_targets(conn: &Connection, repos: &mut [Repo]) {
     for r in repos.iter_mut() {

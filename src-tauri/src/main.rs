@@ -4,11 +4,14 @@
 fluent_i18n::i18n!("locales", fallback = "zh-CN");
 
 mod auth;
+mod discover;
+mod git;
 mod lang;
 mod mcp;
 mod repos;
 mod settings;
 mod state;
+mod sync;
 
 use state::AppState;
 use std::sync::Arc;
@@ -63,8 +66,8 @@ fn main() {
             repos::discover_repos,
             repos::save_repo,
             repos::delete_repo,
-            repos::start_sync,
-            repos::stop_sync,
+            sync::start_sync,
+            sync::stop_sync,
             settings::get_app_info,
             settings::get_base_dir,
             settings::set_base_dir,

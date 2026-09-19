@@ -1,6 +1,6 @@
 use crate::lang::{tr, tr_a, Lang};
-use crate::repos;
 use crate::state::{lock, normalize_base_dir, AppState, OperationLog, Repo};
+use crate::{discover, sync};
 use rusqlite::params;
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
@@ -367,7 +367,7 @@ fn tools_call(state: &Arc<AppState>, lang: Lang, params: &Value) -> Result<Value
         "discover_repos" => {
             // 扫描基地址（中转站目录）登记新仓库：与界面加载逻辑一致，
             // 新登记的仓库以 mcp 为操作人写入日志；返回登记后的完整列表
-            repos::discover(state, OPERATOR, lang).and_then(|()| list_repos_value(state))
+            discover::discover(state, OPERATOR, lang).and_then(|()| list_repos_value(state))
         }
         "list_logs" => {
             // 只读操作不写日志（与 list_repos 一致），避免读取行为自我刷屏
@@ -628,7 +628,7 @@ fn tools_call(state: &Arc<AppState>, lang: Lang, params: &Value) -> Result<Value
             if target_n == 0 {
                 return Err((-32602, tr(lang, "sync-no-targets")));
             }
-            let started = repos::spawn_sync(state.clone(), None, id, OPERATOR.to_string(), lang);
+            let started = sync::spawn_sync(state.clone(), None, id, OPERATOR.to_string(), lang);
             state.add_log(&tr(lang, "log-mcp-sync"), OPERATOR);
             Ok(json!({ "started": started }))
         }
@@ -650,14 +650,14 @@ fn tools_call(state: &Arc<AppState>, lang: Lang, params: &Value) -> Result<Value
                     return Err((-32602, tr(lang, "sync-ids-empty")));
                 }
                 (_, Some(days)) => {
-                    repos::select_stale_ids(state, days).map_err(|e| (-32602, e))?
+                    sync::select_stale_ids(state, days).map_err(|e| (-32602, e))?
                 }
                 (None, None) => {
                     return Err((-32602, tr(lang, "sync-repos-no-selector")));
                 }
             };
             // 未配置 / 已在同步的仓库报告未启动；真实同步由串行队列执行
-            let results = repos::enqueue_syncs(state, None, &ids, OPERATOR, lang);
+            let results = sync::enqueue_syncs(state, None, &ids, OPERATOR, lang);
             let started = results.iter().filter(|(_, s)| *s).count();
             if started > 0 {
                 state.add_log(

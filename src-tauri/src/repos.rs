@@ -1393,4 +1393,148 @@ mod tests {
         drop(state);
         std::fs::remove_dir_all(&root).ok();
     }
+
+    /// 全本地端到端：真实 git 子进程走完「拉取 → 更新 → 推送」流水线。
+    /// 源仓库与目标 bare 仓库均用本地路径，不依赖网络与凭据；
+    /// 第二次同步走 fetch 更新路径（本地中转已存在），验证增量推送到目标。
+    #[test]
+    fn perform_git_sync_full_pipeline_with_local_git() {
+        use crate::state::AppState;
+
+        let root = std::env::temp_dir().join(format!("grs-sync-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&root).unwrap();
+        let base = root.join("base");
+        let source = root.join("src");
+        let target = root.join("target.git");
+        let git = |args: &[&str], cwd: &Path| {
+            let st = std::process::Command::new("git")
+                .args(args)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .current_dir(cwd)
+                .status()
+                .unwrap();
+            assert!(st.success(), "git {:?} 执行失败", args);
+        };
+        // 源仓库：main 分支一次提交；目标：空 bare 仓库
+        std::fs::create_dir_all(&source).unwrap();
+        git(&["init", "-q", "-b", "main"], &source);
+        git(&["config", "user.name", "t"], &source);
+        git(&["config", "user.email", "t@t"], &source);
+        std::fs::write(source.join("a.txt"), "v1").unwrap();
+        git(&["add", "."], &source);
+        git(&["commit", "-q", "-m", "v1"], &source);
+        // 目标：空 bare 仓库（路径作为参数由 git 创建，cwd 用 root）
+        git(
+            &["init", "-q", "--bare", target.to_str().unwrap()],
+            &root,
+        );
+
+        let state = AppState::open(root.join("app.db")).unwrap();
+        {
+            let conn = lock(&state.conn);
+            conn.execute(
+                "INSERT INTO repos (id, name, source) VALUES ('r1', 'demo', ?1)",
+                params![source.to_string_lossy()],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO sync_targets (repo_id, remote, url) VALUES ('r1', 'backup', ?1)",
+                params![target.to_string_lossy()],
+            )
+            .unwrap();
+        }
+        let repo = Repo {
+            id: "r1".to_string(),
+            name: "demo".to_string(),
+            source: source.to_string_lossy().to_string(),
+            last_synced: None,
+            last_status: "idle".to_string(),
+            last_message: None,
+            targets: Vec::new(),
+        };
+        let targets = vec![("backup".to_string(), target.to_string_lossy().to_string())];
+        let target_sha = || {
+            let out = std::process::Command::new("git")
+                .args(["-C", target.to_str().unwrap(), "rev-parse", "refs/heads/main"])
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "目标 bare 仓库应已有 main 分支");
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+
+        // 第一次同步：克隆中转 → 推送分支与标签
+        let (status, message) =
+            perform_git_sync(&state, "r1", &repo, &targets, &base, crate::lang::Lang::Zh);
+        assert_eq!(status, "success", "message: {message}");
+        assert_eq!(target_sha(), rev_parse(&source, "HEAD"), "目标与源提交一致");
+        let sha_after_first = target_sha();
+
+        // 第二次同步：走 fetch 更新路径，源新增提交应推进目标
+        std::fs::write(source.join("a.txt"), "v2").unwrap();
+        git(&["add", "."], &source);
+        git(&["commit", "-q", "-m", "v2"], &source);
+        let (status2, message2) =
+            perform_git_sync(&state, "r1", &repo, &targets, &base, crate::lang::Lang::Zh);
+        assert_eq!(status2, "success", "message: {message2}");
+        assert_ne!(target_sha(), sha_after_first, "第二次同步应推进目标分支");
+        assert_eq!(target_sha(), rev_parse(&source, "HEAD"), "目标与源最新提交一致");
+
+        // 目标行状态与同步时间已记录
+        {
+            let conn = lock(&state.conn);
+            let (st, ts): (String, Option<i64>) = conn
+                .query_row(
+                    "SELECT last_status, last_synced FROM sync_targets WHERE repo_id = 'r1' AND remote = 'backup'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(st, "success");
+            assert!(ts.is_some(), "目标同步时间已更新");
+        }
+        drop(state);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 源地址不可达：克隆阶段失败，整条同步判定失败且消息非空
+    #[test]
+    fn perform_git_sync_fails_when_source_unreachable() {
+        use crate::state::AppState;
+
+        let root = std::env::temp_dir().join(format!("grs-sync-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&root).unwrap();
+        let state = AppState::open(root.join("app.db")).unwrap();
+        let repo = Repo {
+            id: "r1".to_string(),
+            name: "demo".to_string(),
+            source: root.join("no-such-repo").to_string_lossy().to_string(),
+            last_synced: None,
+            last_status: "idle".to_string(),
+            last_message: None,
+            targets: Vec::new(),
+        };
+        let targets = vec![(
+            "backup".to_string(),
+            root.join("target.git").to_string_lossy().to_string(),
+        )];
+        let (status, message) =
+            perform_git_sync(&state, "r1", &repo, &targets, &root, crate::lang::Lang::Zh);
+        assert_eq!(status, "failed");
+        assert!(!message.is_empty(), "失败应带可读消息");
+        // 失败后不应留有 git 子进程句柄
+        assert!(lock(&state.sync_procs).is_empty());
+        drop(state);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    fn rev_parse(path: &Path, spec: &str) -> String {
+        let out = std::process::Command::new("git")
+            .args(["-C", path.to_str().unwrap(), "rev-parse", spec])
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git rev-parse {spec} 失败");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
 }

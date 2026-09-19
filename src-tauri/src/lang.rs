@@ -123,4 +123,17 @@ mod tests {
         assert_eq!(Lang::Zh.sep(), "；");
         assert_eq!(Lang::En.sep(), "; ");
     }
+
+    /// 文案查询：分语言取值、参数替换、缺失键双语行为一致
+    #[test]
+    fn tr_lookups_params_and_fallback() {
+        assert_eq!(tr(Lang::Zh, "repo-not-found"), "仓库不存在");
+        assert_eq!(tr(Lang::En, "repo-not-found"), "Repository not found");
+        assert!(
+            tr_a(Lang::Zh, "log-repo-added", &[("name", "demo")]).contains("demo"),
+            "参数被替换进文案"
+        );
+        // 双语言包均缺失的键：En 回落 zh-CN，两者行为一致
+        assert_eq!(tr(Lang::En, "no-such-key"), tr(Lang::Zh, "no-such-key"));
+    }
 }

@@ -280,22 +280,18 @@ pub struct TargetInput {
 /// 解析仓库 .git/config 中的远端表（name -> url），不 spawn git 进程：
 /// 仓库多时逐个调用 git 子进程在 Windows 上极慢（每次数百毫秒到数秒）。
 /// 支持工作树（.git 为文件，内容 gitdir: <路径>）。
-fn parse_remote_urls(repo_dir: &Path) -> Vec<(String, String)> {
+/// 返回 None 表示 config 无法读取（如 OneDrive 占位文件、权限问题）——
+/// 调用方应跳过该仓库，避免把“读不到”当成“没有远端”而误删已有目标。
+fn parse_remote_urls(repo_dir: &Path) -> Option<Vec<(String, String)>> {
     let dotgit = repo_dir.join(".git");
     let git_dir = if dotgit.is_dir() {
         dotgit
     } else if dotgit.is_file() {
-        let content = match std::fs::read_to_string(&dotgit) {
-            Ok(c) => c,
-            Err(_) => return Vec::new(),
-        };
-        let Some(gitdir) = content
+        let content = std::fs::read_to_string(&dotgit).ok()?;
+        let gitdir = content
             .lines()
             .find_map(|l| l.trim().strip_prefix("gitdir:"))
-            .map(str::trim)
-        else {
-            return Vec::new();
-        };
+            .map(str::trim)?;
         let p = PathBuf::from(gitdir);
         if p.is_absolute() {
             p
@@ -303,12 +299,10 @@ fn parse_remote_urls(repo_dir: &Path) -> Vec<(String, String)> {
             repo_dir.join(p)
         }
     } else {
-        return Vec::new();
+        return Some(Vec::new());
     };
 
-    let Ok(content) = std::fs::read_to_string(git_dir.join("config")) else {
-        return Vec::new();
-    };
+    let content = std::fs::read_to_string(git_dir.join("config")).ok()?;
     let mut remotes: Vec<(String, String)> = Vec::new();
     let mut current: Option<String> = None;
     for line in content.lines() {
@@ -330,7 +324,7 @@ fn parse_remote_urls(repo_dir: &Path) -> Vec<(String, String)> {
             }
         }
     }
-    remotes
+    Some(remotes)
 }
 
 /// 扫描基地址下的一级子目录，自动登记未入库的 git 仓库：
@@ -355,7 +349,9 @@ pub fn discover(state: &AppState, operator: &str, lang: Lang) -> Result<(), Stri
             if name.starts_with('.') || !path.join(".git").exists() {
                 continue;
             }
-            let remotes = parse_remote_urls(&path);
+            let Some(remotes) = parse_remote_urls(&path) else {
+                continue; // config 读不到：跳过，不动数据库里的已有目标
+            };
             let origin = remotes
                 .iter()
                 .find(|(n, _)| n == "origin")

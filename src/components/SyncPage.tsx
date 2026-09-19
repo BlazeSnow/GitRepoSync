@@ -210,7 +210,7 @@ export function SyncPage({ token }: { token: string }) {
     const tip = [t.lastMessage, t.lastStatus].filter(Boolean).join(" | ");
     return (
       <span
-        className="block max-w-0 truncate text-muted-foreground"
+        className="block truncate text-muted-foreground"
         title={tip || undefined}
       >
         {t.url}
@@ -256,9 +256,9 @@ export function SyncPage({ token }: { token: string }) {
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead className="sticky top-0 z-10 w-44 bg-card">{t("colRepo")}</TableHead>
-              <TableHead className="sticky top-0 z-10 max-w-56 bg-card">{t("colSource")}</TableHead>
+              <TableHead className="sticky top-0 z-10 w-48 bg-card">{t("colSource")}</TableHead>
               {targetRemotes.map((remote) => (
-                <TableHead key={remote} className="sticky top-0 z-10 bg-card">
+                <TableHead key={remote} className="sticky top-0 z-10 w-48 bg-card">
                   <span className="font-mono text-xs">{remote}</span>
                 </TableHead>
               ))}
@@ -286,13 +286,15 @@ export function SyncPage({ token }: { token: string }) {
                   >
                     <TableCell className="font-medium">{repo.name}</TableCell>
                     <TableCell
-                      className="max-w-0 truncate text-muted-foreground"
+                      className="w-48 text-muted-foreground"
                       title={repo.source || undefined}
                     >
-                      {repo.source || t("notConfigured")}
+                      <span className="block truncate">
+                        {repo.source || t("notConfigured")}
+                      </span>
                     </TableCell>
                     {targetRemotes.map((remote) => (
-                      <TableCell key={remote} className="max-w-0">
+                      <TableCell key={remote} className="w-48">
                         {targetCell(repo, remote)}
                       </TableCell>
                     ))}

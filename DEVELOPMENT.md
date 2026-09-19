@@ -68,12 +68,13 @@ cd src-tauri && cargo test               # 后端单元测试
 │   ├── features.md      # 功能设计与实现说明
 │   └── release.md       # 版本号规则与发布流程
 ├── src/                 # 前端代码（React + TypeScript）
-│   ├── components/      # 页面组件与 shadcn/ui 风格基础组件（ui/）
-│   ├── lib/             # Tauri 命令封装（api.ts）、类型、工具函数
+│   ├── components/      # 页面组件、弹窗组件与 shadcn/ui 风格基础组件（ui/）
+│   ├── i18n/            # 前端语言词典（zh.ts / en.ts，i18n.ts 负责初始化）
+│   ├── lib/             # Tauri 命令封装（api.ts）、类型、主题（theme.ts）、工具函数
 │   └── main.tsx
 ├── src-tauri/           # Rust 后端
 │   ├── locales/         # Fluent 语言包（zh-CN / en-US）
-│   ├── src/             # main / state / lang / auth / repos / settings / mcp
+│   ├── src/             # main / state / lang / auth / repos / discover / sync / git / mcp（+ mcp/tools）/ settings
 │   ├── Cargo.toml
 │   └── tauri.conf.json
 ├── index.html

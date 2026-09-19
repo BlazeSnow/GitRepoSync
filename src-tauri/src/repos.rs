@@ -1276,4 +1276,13 @@ mod tests {
         assert_eq!(parse_remote_urls(&repo), Some(Vec::new()));
         std::fs::remove_dir_all(&root).ok();
     }
+
+    /// 错误消息里的 git 子命令名：跳过注入的配置前缀（两组 -c k v）
+    #[test]
+    fn git_display_cmd_skips_config_prefix() {
+        let args = git_args(&["fetch", "origin"]);
+        assert_eq!(git_display_cmd(&args), "fetch");
+        assert_eq!(git_display_cmd(&["push".to_string()]), "push");
+        assert_eq!(git_display_cmd(&[]), "git");
+    }
 }

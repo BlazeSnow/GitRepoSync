@@ -882,4 +882,61 @@ mod tests {
         assert!(resp.contains("\"result\""));
         std::fs::remove_dir_all(&root).ok();
     }
+
+    /// 工具参数校验与 base_dir 往返（~ 展开为完整路径）
+    #[test]
+    fn mcp_tools_validation_and_base_dir_roundtrip() {
+        let (state, root) = open_state();
+        // 参数校验：缺源地址 / 无目标 / 未知工具均拒绝
+        assert_eq!(
+            call(&state, "add_repo", json!({ "name": "a", "source": "" })).unwrap_err().0,
+            -32602
+        );
+        assert!(
+            call(&state, "add_repo", json!({ "name": "a", "source": "s" })).is_err(),
+            "没有任何目标时拒绝"
+        );
+        assert!(call(&state, "nope", json!({})).is_err(), "未知工具");
+        // base_dir 往返：~ 输入展开为完整路径
+        call(&state, "set_base_dir", json!({ "base_dir": "~/repo" })).unwrap();
+        let got = call(&state, "get_base_dir", json!({})).unwrap();
+        let home = dirs::home_dir().expect("测试环境无用户目录");
+        assert_eq!(got["base_dir"], json!(home.join("repo").to_string_lossy()));
+        // 空值拒绝
+        assert!(call(&state, "set_base_dir", json!({ "base_dir": "  " })).is_err());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// sync_repo 只验证拒绝路径（有效路径会拉起真实 git 同步，不在单测覆盖）：
+    /// 仓库不存在 / 无源地址 / 无备份目标均拒绝且不启动同步
+    #[test]
+    fn mcp_sync_repo_rejects_unconfigured() {
+        let (state, root) = open_state();
+        assert!(
+            call(&state, "sync_repo", json!({ "id": "nope" })).is_err(),
+            "仓库不存在"
+        );
+        {
+            let conn = lock(&state.conn);
+            conn.execute(
+                "INSERT INTO repos (id, name, source) VALUES ('r1', 'r1', '')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO repos (id, name, source) VALUES ('r2', 'r2', 'https://src/r2.git')",
+                [],
+            )
+            .unwrap();
+        }
+        assert!(call(&state, "sync_repo", json!({ "id": "r1" })).is_err(), "无源地址");
+        assert!(
+            call(&state, "sync_repo", json!({ "id": "r2" })).is_err(),
+            "无备份目标"
+        );
+        // 三次拒绝均未入队：同步集合与队列保持为空
+        assert!(lock(&state.syncing).is_empty());
+        assert!(lock(&state.sync_queue).jobs.is_empty());
+        std::fs::remove_dir_all(&root).ok();
+    }
 }

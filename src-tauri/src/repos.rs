@@ -466,11 +466,12 @@ pub fn discover_repos(state: State<'_, Arc<AppState>>, token: String) -> Result<
             "SELECT {REPO_COLS} FROM repos WHERE hidden = 0 ORDER BY name"
         ))
         .map_err(|e| e.to_string())?;
-    let repos = stmt
+    let mut repos = stmt
         .query_map([], repo_from_row)
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
+    crate::state::attach_targets(&conn, &mut repos);
     Ok(repos)
 }
 

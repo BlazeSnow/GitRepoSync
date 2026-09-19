@@ -65,6 +65,9 @@ log-mcp-repo-added = 通过 MCP 添加仓库「{$name}」
 log-mcp-repo-updated = 通过 MCP 更新仓库「{$name}」
 log-mcp-repo-deleted = 通过 MCP 移除仓库「{$name}」
 log-mcp-sync = 通过 MCP 触发同步
+log-mcp-sync-batch = 通过 MCP 批量触发同步（{$count} 个仓库）
+sync-repos-no-selector = 需要提供 ids（仓库 ID 列表）或 days（同步范围天数）之一
+sync-ids-empty = ids 不能为空
 log-mcp-base-dir-changed = 通过 MCP 修改仓库基地址为 {$dir}
 
 # ---------- MCP 工具描述 ----------
@@ -83,6 +86,9 @@ tool-remove-repo = 移除指定同步仓库（软删除）：从列表隐藏并�
 tool-remove-repo-id = 仓库 ID
 tool-sync-repo = 立即开始同步指定仓库（异步执行，可用 get_sync_status 查询进度）
 tool-sync-repo-id = 仓库 ID
+tool-sync-repos = 批量触发同步：提供 ids 按列表同步，或提供 days 按范围同步（0=全部仓库，N=最近 N 天未同步，含从未同步，与界面范围一致）；未配置（缺源地址或目标）的仓库自动跳过，两者都提供时优先 ids。异步执行，可用 get_sync_status 查询进度
+tool-sync-repos-ids = 仓库 ID 列表（可选）
+tool-sync-repos-days = 同步范围天数（可选；0=全部，N=最近 N 天未同步，含从未同步）
 tool-get-sync-status = 查询所有仓库的最近同步状态
 tool-list-logs = 按时间倒序列出软件操作日志（操作、操作人、操作时间）
 tool-list-logs-limit = 返回条数上限（可选，默认 200，最大 1000）

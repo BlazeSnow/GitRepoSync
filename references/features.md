@@ -74,7 +74,7 @@
 
 **实现说明**：软件采用 MCP stdio 连接方式——Agent 客户端以子进程运行本程序的 `mcp` 模式（`git-repo-sync.exe mcp`），协议为换行分隔的 JSON-RPC 2.0（stdin 读入、stdout 输出）。通过 APIKEY 鉴权：客户端经环境变量 `GIT_REPO_SYNC_API_KEY` 或 `--api-key` 参数提供，与 `settings` 表中的 APIKEY 一致方可访问。客户端断开后进程会等待在途同步完成再退出，不会中断同步。GUI 与 mcp 子命令共享同一 SQLite 数据库。
 
-可用工具（v1.0.0-beta.2 起 10 个）：
+可用工具（v1.0.0-beta.2 起 11 个）：
 
 | 工具 | 说明 |
 | --- | --- |
@@ -84,6 +84,7 @@
 | `update_repo` | 更新仓库配置（改名 / 源地址；提供 `targets` 时整体替换目标列表） |
 | `remove_repo` | 移除仓库（软删除：隐藏并清空目标） |
 | `sync_repo` | 立即同步指定仓库（异步） |
+| `sync_repos` | 批量触发同步：`ids` 列表或 `days` 范围（0=全部，N=最近 N 天未同步，含从未同步，与界面范围一致）；未配置仓库自动跳过，按仓库报告是否启动 |
 | `get_sync_status` | 查询所有仓库最近同步状态 |
 | `list_logs` | 按时间倒序列出操作日志（`limit` 可选，默认 200、上限 1000；只读不写日志） |
 | `get_base_dir` | 查询本地仓库基地址 |

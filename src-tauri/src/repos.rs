@@ -222,7 +222,20 @@ pub fn start_sync(
 ) -> Result<usize, String> {
     let username = require_session(&state, &token)?;
     let lang = gui_lang();
-    let mut started = 0;
+    let results = enqueue_syncs(state.inner(), Some(app), &ids, &username, lang);
+    Ok(results.iter().filter(|(_, started)| *started).count())
+}
+
+/// 批量入队同步（界面与 MCP 共用）：未配置（缺源地址或备份目标）的仓库跳过，
+/// 已在同步/排队的仓库不重复入队；按入参顺序返回每个仓库是否实际启动
+pub fn enqueue_syncs(
+    state: &Arc<AppState>,
+    app: Option<AppHandle>,
+    ids: &[String],
+    operator: &str,
+    lang: Lang,
+) -> Vec<(String, bool)> {
+    let mut results = Vec::with_capacity(ids.len());
     for id in ids {
         // 未配置（缺源地址或备份目标）的仓库不参与同步，避免必然的“失败”
         let configured = {
@@ -244,19 +257,38 @@ pub fn start_sync(
             !src.is_empty() && n > 0
         };
         if !configured {
+            results.push((id.clone(), false));
             continue;
         }
-        if spawn_sync(
-            state.inner().clone(),
-            Some(app.clone()),
-            id,
-            username.clone(),
-            lang,
-        ) {
-            started += 1;
-        }
+        let started = spawn_sync(state.clone(), app.clone(), id.clone(), operator.to_string(), lang);
+        results.push((id.clone(), started));
     }
-    Ok(started)
+    results
+}
+
+/// 按范围选择参与同步的仓库（与界面范围下拉语义一致）：
+/// days <= 0 为全部已配置仓库；days > 0 为最近 N 天未同步（含从未同步）
+pub fn select_stale_ids(state: &AppState, days: i64) -> Result<Vec<String>, String> {
+    let conn = lock(&state.conn);
+    let mut sql = String::from(
+        "SELECT id FROM repos WHERE hidden = 0 AND source != ''
+         AND EXISTS (SELECT 1 FROM sync_targets WHERE sync_targets.repo_id = repos.id)",
+    );
+    let cutoff = now_ms() - days.saturating_mul(86_400_000);
+    let args: Vec<i64> = if days > 0 {
+        sql.push_str(" AND (last_synced IS NULL OR last_synced < ?1)");
+        vec![cutoff]
+    } else {
+        Vec::new()
+    };
+    sql.push_str(" ORDER BY name");
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let ids = stmt
+        .query_map(rusqlite::params_from_iter(args), |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    Ok(ids)
 }
 
 #[tauri::command]
@@ -1284,5 +1316,81 @@ mod tests {
         assert_eq!(git_display_cmd(&args), "fetch");
         assert_eq!(git_display_cmd(&["push".to_string()]), "push");
         assert_eq!(git_display_cmd(&[]), "git");
+    }
+
+    /// select_stale_ids 与界面范围语义一致：0=全部已配置，N=最近 N 天未同步（含从未同步）；
+    /// 未配置（缺源/缺目标）与隐藏仓库不参与
+    #[test]
+    fn select_stale_ids_matches_range_semantics() {
+        use crate::state::AppState;
+
+        let root = std::env::temp_dir().join(format!("grs-stale-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&root).unwrap();
+        let state = AppState::open(root.join("app.db")).unwrap();
+        {
+            let conn = lock(&state.conn);
+            let now = now_ms();
+            let day: i64 = 86_400_000;
+            // (id, source, last_synced, hidden)；有目标的仓库统一补一条 backup 目标
+            let rows = [
+                ("fresh", "https://src/f.git", Some(now), 0),
+                ("stale", "https://src/s.git", Some(now - 10 * day), 0),
+                ("never", "https://src/n.git", None, 0),
+                ("unconf", "", None, 0),
+                ("notarget", "https://src/t.git", None, 0),
+                ("hidden", "https://src/h.git", None, 1),
+            ];
+            for (id, source, synced, hidden) in rows {
+                conn.execute(
+                    "INSERT INTO repos (id, name, source, last_synced, hidden) VALUES (?1, ?1, ?2, ?3, ?4)",
+                    params![id, source, synced, hidden],
+                )
+                .unwrap();
+                if id != "notarget" {
+                    conn.execute(
+                        "INSERT INTO sync_targets (repo_id, remote, url) VALUES (?1, 'backup', 'https://bak/x.git')",
+                        params![id],
+                    )
+                    .unwrap();
+                }
+            }
+        }
+        assert_eq!(
+            select_stale_ids(&state, 0).unwrap(),
+            vec!["fresh", "never", "stale"],
+            "全部范围 = 已配置仓库（按名称排序）"
+        );
+        assert_eq!(
+            select_stale_ids(&state, 7).unwrap(),
+            vec!["never", "stale"],
+            "7 天范围 = 从未同步 + 超期仓库"
+        );
+        drop(state);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// enqueue_syncs：未配置仓库跳过且不启动同步（不产生 git 子进程）
+    #[test]
+    fn enqueue_syncs_skips_unconfigured_without_spawning() {
+        use crate::state::AppState;
+
+        let root = std::env::temp_dir().join(format!("grs-enq-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&root).unwrap();
+        let state = Arc::new(AppState::open(root.join("app.db")).unwrap());
+        {
+            let conn = lock(&state.conn);
+            conn.execute("INSERT INTO repos (id, name, source) VALUES ('r1', 'r1', '')", [])
+                .unwrap();
+        }
+        let ids = ["r1".to_string(), "nope".to_string()];
+        let results = enqueue_syncs(&state, None, &ids, "test", crate::lang::Lang::Zh);
+        assert_eq!(
+            results,
+            vec![("r1".to_string(), false), ("nope".to_string(), false)]
+        );
+        assert!(lock(&state.syncing).is_empty(), "未产生任何同步任务");
+        assert!(lock(&state.sync_queue).jobs.is_empty());
+        drop(state);
+        std::fs::remove_dir_all(&root).ok();
     }
 }

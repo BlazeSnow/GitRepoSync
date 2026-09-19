@@ -240,6 +240,24 @@ fn tools_list(lang: Lang) -> Value {
                 }
             },
             {
+                "name": "sync_repos",
+                "description": tr(lang, "tool-sync-repos"),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "ids": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": tr(lang, "tool-sync-repos-ids")
+                        },
+                        "days": {
+                            "type": "integer",
+                            "description": tr(lang, "tool-sync-repos-days")
+                        }
+                    }
+                }
+            },
+            {
                 "name": "get_sync_status",
                 "description": tr(lang, "tool-get-sync-status"),
                 "inputSchema": { "type": "object", "properties": {} }
@@ -614,6 +632,52 @@ fn tools_call(state: &Arc<AppState>, lang: Lang, params: &Value) -> Result<Value
             state.add_log(&tr(lang, "log-mcp-sync"), OPERATOR);
             Ok(json!({ "started": started }))
         }
+        "sync_repos" => {
+            // 选择器二选一：ids 显式列表优先；否则 days 范围（0=全部，N=最近 N 天未同步，
+            // 与界面范围下拉语义一致）。两者皆缺拒绝，避免误触发全量同步
+            let ids_opt: Option<Vec<String>> = args
+                .get("ids")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|x| x.as_str().map(str::to_string))
+                        .collect()
+                });
+            let days_opt = args.get("days").and_then(|v| v.as_i64());
+            let ids = match (ids_opt, days_opt) {
+                (Some(ids), _) if !ids.is_empty() => ids,
+                (Some(_), None) => {
+                    return Err((-32602, tr(lang, "sync-ids-empty")));
+                }
+                (_, Some(days)) => {
+                    repos::select_stale_ids(state, days).map_err(|e| (-32602, e))?
+                }
+                (None, None) => {
+                    return Err((-32602, tr(lang, "sync-repos-no-selector")));
+                }
+            };
+            // 未配置 / 已在同步的仓库报告未启动；真实同步由串行队列执行
+            let results = repos::enqueue_syncs(state, None, &ids, OPERATOR, lang);
+            let started = results.iter().filter(|(_, s)| *s).count();
+            if started > 0 {
+                state.add_log(
+                    &tr_a(
+                        lang,
+                        "log-mcp-sync-batch",
+                        &[("count", &started.to_string())],
+                    ),
+                    OPERATOR,
+                );
+            }
+            Ok(json!({
+                "requested": ids.len(),
+                "started": started,
+                "results": results
+                    .iter()
+                    .map(|(id, s)| json!({ "id": id, "started": s }))
+                    .collect::<Vec<_>>(),
+            }))
+        }
         "get_base_dir" => Ok(json!({ "base_dir": state
             .get_setting("base_dir")
             .unwrap_or_else(crate::state::default_base_dir) })),
@@ -977,6 +1041,28 @@ mod tests {
         // 幂等：再次扫描不产生重复
         let again = call(&state, "discover_repos", json!({})).unwrap();
         assert_eq!(again.as_array().unwrap().len(), 1);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// sync_repos：选择器校验与批量结果报告（不触发真实同步的路径）
+    #[test]
+    fn mcp_sync_repos_requires_selector_and_reports_results() {
+        let (state, root) = open_state();
+        // 无 ids 且无 days：拒绝
+        assert!(call(&state, "sync_repos", json!({})).is_err());
+        // 空 ids 且无 days：拒绝
+        assert!(call(&state, "sync_repos", json!({ "ids": [] })).is_err());
+        // ids 列表：不存在与未配置的仓库均报告未启动
+        let r = call(&state, "sync_repos", json!({ "ids": ["nope"] })).unwrap();
+        assert_eq!(r["requested"], json!(1));
+        assert_eq!(r["started"], json!(0));
+        assert_eq!(r["results"][0]["id"], json!("nope"));
+        assert_eq!(r["results"][0]["started"], json!(false));
+        // days 范围：当前无任何已配置仓库，不启动任何同步
+        let r = call(&state, "sync_repos", json!({ "days": 0 })).unwrap();
+        assert_eq!(r["requested"], json!(0));
+        assert_eq!(r["started"], json!(0));
+        assert!(lock(&state.syncing).is_empty(), "未产生真实同步任务");
         std::fs::remove_dir_all(&root).ok();
     }
 }

@@ -66,6 +66,9 @@ log-mcp-repo-added = Added repository "{$name}" via MCP
 log-mcp-repo-updated = Updated repository "{$name}" via MCP
 log-mcp-repo-deleted = Removed repository "{$name}" via MCP
 log-mcp-sync = Triggered sync via MCP
+log-mcp-sync-batch = Triggered batch sync of {$count} repositories via MCP
+sync-repos-no-selector = Provide either ids (repository ID list) or days (sync range in days)
+sync-ids-empty = ids must not be empty
 log-mcp-base-dir-changed = Changed repository base directory to {$dir} via MCP
 
 # ---------- MCP tool descriptions ----------
@@ -84,6 +87,9 @@ tool-remove-repo = Remove the specified sync repository (soft delete): it is hid
 tool-remove-repo-id = Repository ID
 tool-sync-repo = Start syncing the specified repository immediately (async; use get_sync_status to check progress)
 tool-sync-repo-id = Repository ID
+tool-sync-repos = Trigger batch syncs: provide ids to sync a list, or days for a range (0 = all repositories, N = not synced within the last N days, including never synced, matching the app's range); unconfigured repositories are skipped, ids takes precedence when both are given. Async; use get_sync_status to check progress
+tool-sync-repos-ids = Repository ID list (optional)
+tool-sync-repos-days = Sync range in days (optional; 0 = all, N = not synced within the last N days, including never synced)
 tool-get-sync-status = Query the latest sync status of all repositories
 tool-list-logs = List the operation log newest first (action, operator, time)
 tool-list-logs-limit = Maximum number of entries to return (optional, default 200, max 1000)

@@ -92,6 +92,8 @@ const zh = {
   toolRemoveRepo:
     "移除指定同步仓库（软删除）：从列表隐藏并清空其目标配置；基地址内目录不被删除，也不会被自动发现重新登记",
   toolSyncRepo: "立即开始同步指定仓库（异步执行）",
+  toolSyncRepos:
+    "批量触发同步：提供 ids 按列表同步，或提供 days 按范围同步（0=全部仓库，N=最近 N 天未同步，含从未同步，与界面范围一致）；未配置（缺源地址或目标）的仓库自动跳过，两者都提供时优先 ids。异步执行，可用 get_sync_status 查询进度",
   toolGetSyncStatus: "查询所有仓库的最近同步状态",
   toolListLogs: "按时间倒序列出软件操作日志（操作、操作人、操作时间）",
   toolGetBaseDir: "查询本地仓库基地址（中转站目录）",
@@ -208,6 +210,8 @@ const en = {
   toolRemoveRepo:
     "Remove the specified sync repository (soft delete): it is hidden from the list and its targets are cleared; the directory under the base directory is not deleted and the repository will not be re-discovered",
   toolSyncRepo: "Start syncing the specified repository immediately (async)",
+  toolSyncRepos:
+    "Trigger batch syncs: provide ids to sync a list, or days for a range (0 = all repositories, N = not synced within the last N days, including never synced, matching the app's range); unconfigured repositories are skipped, ids takes precedence when both are given. Async; use get_sync_status to check progress",
   toolGetSyncStatus: "Query the latest sync status of all repositories",
   toolListLogs: "List the operation log newest first (action, operator, time)",
   toolGetBaseDir: "Query the local repository base directory (staging directory)",

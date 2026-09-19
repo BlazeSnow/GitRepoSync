@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "@/lib/api";
 import type { Repo, SyncEvent, SyncStatus } from "@/lib/types";
@@ -50,9 +50,9 @@ export function SyncPage({ token }: { token: string }) {
   const [menu, setMenu] = useState<{ x: number; y: number; repo: Repo } | null>(null);
   const [error, setError] = useState("");
 
+  // 全量发现（扫描基地址 + 登记新仓库）：仅在页面挂载和手动刷新时执行
   const load = useCallback(async () => {
     try {
-      // 自动发现基地址内仓库（origin → 源地址，backup → 目标地址）后返回全量列表
       setRepos(await api.discoverRepos(token));
       setError("");
     } catch (err) {
@@ -60,13 +60,32 @@ export function SyncPage({ token }: { token: string }) {
     }
   }, [token]);
 
+  // 轻量刷新（纯 SQL 查询）：同步事件高频触发时按 400ms 节流，避免大表格反复重渲
+  const reloadList = useCallback(async () => {
+    try {
+      setRepos(await api.listRepos(token));
+      setError("");
+    } catch (err) {
+      setError(String(err));
+    }
+  }, [token]);
+  const reloadTimer = useRef<number | null>(null);
+  const scheduleReload = useCallback(() => {
+    if (reloadTimer.current !== null) return;
+    reloadTimer.current = window.setTimeout(() => {
+      reloadTimer.current = null;
+      void reloadList();
+    }, 400);
+  }, [reloadList]);
+
   useEffect(() => {
     void load();
     const unlisten = listen<SyncEvent>("sync-status", () => {
-      void load();
+      scheduleReload();
     });
     return () => {
       void unlisten.then((f) => f());
+      if (reloadTimer.current !== null) window.clearTimeout(reloadTimer.current);
     };
   }, [load]);
 

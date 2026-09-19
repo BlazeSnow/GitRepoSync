@@ -277,22 +277,60 @@ pub struct TargetInput {
     pub url: String,
 }
 
-/// 读取本地仓库指定远端的 URL；远端不存在返回 None
-fn git_remote_url(dir: &Path, name: &str) -> Option<String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(["remote", "get-url", name])
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .stdin(Stdio::null())
-        .output()
-        .ok()?;
-    if out.status.success() {
-        let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        (!s.is_empty()).then_some(s)
+/// 解析仓库 .git/config 中的远端表（name -> url），不 spawn git 进程：
+/// 仓库多时逐个调用 git 子进程在 Windows 上极慢（每次数百毫秒到数秒）。
+/// 支持工作树（.git 为文件，内容 gitdir: <路径>）。
+fn parse_remote_urls(repo_dir: &Path) -> Vec<(String, String)> {
+    let dotgit = repo_dir.join(".git");
+    let git_dir = if dotgit.is_dir() {
+        dotgit
+    } else if dotgit.is_file() {
+        let content = match std::fs::read_to_string(&dotgit) {
+            Ok(c) => c,
+            Err(_) => return Vec::new(),
+        };
+        let Some(gitdir) = content
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("gitdir:"))
+            .map(str::trim)
+        else {
+            return Vec::new();
+        };
+        let p = PathBuf::from(gitdir);
+        if p.is_absolute() {
+            p
+        } else {
+            repo_dir.join(p)
+        }
     } else {
-        None
+        return Vec::new();
+    };
+
+    let Ok(content) = std::fs::read_to_string(git_dir.join("config")) else {
+        return Vec::new();
+    };
+    let mut remotes: Vec<(String, String)> = Vec::new();
+    let mut current: Option<String> = None;
+    for line in content.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            current = None;
+            let inner = line.trim_start_matches('[').trim_end_matches(']');
+            if let Some(rest) = inner.strip_prefix("remote") {
+                let name = rest.trim().trim_matches('"');
+                if !name.is_empty() {
+                    current = Some(name.to_string());
+                }
+            }
+        } else if let Some(name) = &current {
+            if let Some((k, v)) = line.split_once('=') {
+                if k.trim() == "url" && !remotes.iter().any(|(n, _)| n == name) {
+                    remotes.push((name.clone(), v.trim().to_string()));
+                }
+            }
+        }
     }
+    remotes
 }
 
 /// 扫描基地址下的一级子目录，自动登记未入库的 git 仓库：
@@ -317,16 +355,14 @@ pub fn discover(state: &AppState, operator: &str, lang: Lang) -> Result<(), Stri
             if name.starts_with('.') || !path.join(".git").exists() {
                 continue;
             }
-            let remotes = git_remote_list(&path);
+            let remotes = parse_remote_urls(&path);
             let origin = remotes
                 .iter()
-                .any(|r| r == "origin")
-                .then(|| git_remote_url(&path, "origin"))
-                .flatten();
+                .find(|(n, _)| n == "origin")
+                .map(|(_, u)| u.clone());
             let targets: Vec<(String, String)> = remotes
-                .iter()
-                .filter(|r| r.as_str() != "origin")
-                .filter_map(|r| git_remote_url(&path, r).map(|u| (r.clone(), u)))
+                .into_iter()
+                .filter(|(n, _)| n != "origin")
                 .collect();
             found.push((name.to_string(), origin, targets));
         }
@@ -420,24 +456,7 @@ pub fn discover(state: &AppState, operator: &str, lang: Lang) -> Result<(), Stri
     Ok(())
 }
 
-/// 列出本地仓库的全部远端名
-fn git_remote_list(dir: &Path) -> Vec<String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .arg("remote")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .stdin(Stdio::null())
-        .output();
-    match out {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
-            .lines()
-            .map(|l| l.trim().to_string())
-            .filter(|l| !l.is_empty())
-            .collect(),
-        _ => Vec::new(),
-    }
-}
+
 
 /// 主界面加载入口：先自动发现基地址内仓库，再返回最新列表
 #[tauri::command]

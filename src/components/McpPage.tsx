@@ -46,6 +46,7 @@ export function McpPage({ token }: { token: string }) {
     { name: "remove_repo", description: t("toolRemoveRepo") },
     { name: "sync_repo", description: t("toolSyncRepo") },
     { name: "get_sync_status", description: t("toolGetSyncStatus") },
+    { name: "list_logs", description: t("toolListLogs") },
     { name: "get_base_dir", description: t("toolGetBaseDir") },
     { name: "set_base_dir", description: t("toolSetBaseDir") },
   ];

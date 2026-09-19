@@ -1,6 +1,6 @@
 use crate::lang::{tr, tr_a, Lang};
 use crate::repos;
-use crate::state::{lock, normalize_base_dir, AppState, Repo};
+use crate::state::{lock, normalize_base_dir, AppState, OperationLog, Repo};
 use rusqlite::params;
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
@@ -240,6 +240,16 @@ fn tools_list(lang: Lang) -> Value {
                 "inputSchema": { "type": "object", "properties": {} }
             },
             {
+                "name": "list_logs",
+                "description": tr(lang, "tool-list-logs"),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "limit": { "type": "integer", "description": tr(lang, "tool-list-logs-limit") }
+                    }
+                }
+            },
+            {
                 "name": "get_base_dir",
                 "description": tr(lang, "tool-get-base-dir"),
                 "inputSchema": { "type": "object", "properties": {} }
@@ -287,6 +297,30 @@ fn list_repos_value(state: &AppState) -> Result<Value, String> {
     serde_json::to_value(repos).map_err(|e| e.to_string())
 }
 
+/// 按时间倒序列出操作日志（limit 已由调用方钳制）
+fn list_logs_value(state: &AppState, limit: i64) -> Result<Value, String> {
+    let conn = lock(&state.conn);
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, action, operator, created_at FROM operation_logs
+             ORDER BY id DESC LIMIT ?1",
+        )
+        .map_err(|e| e.to_string())?;
+    let logs = stmt
+        .query_map(params![limit], |row| {
+            Ok(OperationLog {
+                id: row.get(0)?,
+                action: row.get(1)?,
+                operator: row.get(2)?,
+                created_at: row.get(3)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    serde_json::to_value(logs).map_err(|e| e.to_string())
+}
+
 /// 按 id 读取完整仓库（含目标状态）并序列化；供 add / update 工具响应复用
 fn repo_value_by_id(state: &AppState, id: &str, lang: Lang) -> Result<Value, String> {
     let conn = lock(&state.conn);
@@ -307,6 +341,15 @@ fn tools_call(state: &Arc<AppState>, lang: Lang, params: &Value) -> Result<Value
 
     let result: Result<Value, String> = match name {
         "list_repos" | "get_sync_status" => list_repos_value(state),
+        "list_logs" => {
+            // 只读操作不写日志（与 list_repos 一致），避免读取行为自我刷屏
+            let limit = args
+                .get("limit")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(200)
+                .clamp(1, 1000);
+            list_logs_value(state, limit)
+        }
         "add_repo" => {
             let field = |k: &str| {
                 args.get(k)
@@ -750,6 +793,34 @@ mod tests {
                 .0,
             -32602
         );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// list_logs：按时间倒序返回操作日志，limit 生效；只读操作自身不写入日志
+    #[test]
+    fn list_logs_returns_recent_entries() {
+        let (state, root) = open_state();
+        for name in ["l1", "l2"] {
+            call(
+                &state,
+                "add_repo",
+                json!({
+                    "name": name, "source": "https://src/x.git",
+                    "targets": [{ "remote": "b", "url": "https://b/x.git" }]
+                }),
+            )
+            .unwrap();
+        }
+        let logs = call(&state, "list_logs", json!({ "limit": 1 })).unwrap();
+        let arr = logs.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["operator"], json!("mcp"));
+        assert_eq!(arr[0]["action"].as_str().unwrap().contains("l2"), true, "倒序：最新操作在前");
+        let all = call(&state, "list_logs", json!({})).unwrap();
+        assert!(all.as_array().unwrap().len() >= 2);
+        // limit 钳制到 [1, 1000]，非法值不报错
+        let clamped = call(&state, "list_logs", json!({ "limit": 0 })).unwrap();
+        assert!(!clamped.as_array().unwrap().is_empty());
         std::fs::remove_dir_all(&root).ok();
     }
 }

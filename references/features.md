@@ -104,7 +104,7 @@
 ## 7. 设置页面
 
 - 修改本地仓库基地址（同步中转目录的父目录）：通过「选择目录…」按钮调用系统目录选择器，选中即保存；默认为本机用户目录下的 `repo` 目录，始终以完整路径存储（不支持 `~` 相对写法，MCP 设置的 `~` 输入会自动展开）
-- 修改账户密码
+- 修改账户密码：真实 `<form>` 语义（支持回车提交）+ 标准 `autocomplete` 标注（只读用户名字段关联凭据、旧密码 `current-password`、新密码与确认 `new-password`），供密码管理器识别并提供生成/保存建议
 - 列出本软件版本号
 - 列出本软件源码仓库：[github.com/BlazeSnow/GitRepoSync](https://github.com/BlazeSnow/GitRepoSync)
 

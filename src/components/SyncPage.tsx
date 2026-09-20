@@ -55,6 +55,7 @@ export function SyncPage({ token }: { token: string }) {
   const [deleteTarget, setDeleteTarget] = useState<Repo | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; repo: Repo } | null>(null);
   const [error, setError] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
 
   // 全量发现（扫描基地址 + 登记新仓库）：仅在页面挂载和手动刷新时执行
   const load = useCallback(async () => {
@@ -124,6 +125,17 @@ export function SyncPage({ token }: { token: string }) {
       void load();
     } catch (err) {
       setError(String(err));
+    }
+  }
+
+  // 手动刷新：重新扫描基地址并加载最新列表（MCP 等其他入口的改动借此可见）
+  async function handleRefresh() {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await load();
+    } finally {
+      setRefreshing(false);
     }
   }
 
@@ -228,6 +240,10 @@ export function SyncPage({ token }: { token: string }) {
           </SelectContent>
         </Select>
         <div className="flex-1" />
+        <Button variant="outline" onClick={() => void handleRefresh()} disabled={refreshing}>
+          <IconRefresh />
+          {t("refreshRepos")}
+        </Button>
         <Button variant="secondary" onClick={() => setEditor({ repo: null })}>
           <IconPlus />
           {t("addRepo")}

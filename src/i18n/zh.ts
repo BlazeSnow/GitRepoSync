@@ -26,6 +26,7 @@ export const zh = {
   staleDays: "{{count}} 天内未同步",
   staleEmpty: "该范围内没有需要同步的仓库",
   addRepo: "添加仓库",
+  refreshRepos: "刷新仓库",
   colRepo: "仓库",
   colAddress: "地址",
   colTarget: "目标地址",

@@ -154,6 +154,8 @@ export function SyncPage({ token }: { token: string }) {
 
   function openMenu(e: React.MouseEvent, repo: Repo) {
     e.preventDefault();
+    // 阻止冒泡到 window 的菜单关闭监听：连续右键另一行时菜单直接切换而非消失
+    e.stopPropagation();
     setMenu({ x: e.clientX, y: e.clientY, repo });
   }
 
@@ -166,7 +168,10 @@ export function SyncPage({ token }: { token: string }) {
         {
           label: t("startSync"),
           onSelect: () => {
-            void api.startSync(token, [menu.repo.id]).then(load);
+            void api
+              .startSync(token, [menu.repo.id])
+              .then(load)
+              .catch((err) => setError(String(err)));
           },
         },
         { label: t("confirmDelete"), danger: true, onSelect: () => setDeleteTarget(menu.repo) },
@@ -252,7 +257,11 @@ export function SyncPage({ token }: { token: string }) {
 
       {error && <p className="mb-3 text-sm text-destructive">{error}</p>}
 
-      <div className="min-h-0 flex-1 overflow-hidden rounded-lg border bg-card">
+      {/* 容器级阻止右键默认行为：表头/空白区右键不再弹出 WebView 原生菜单 */}
+      <div
+        className="min-h-0 flex-1 overflow-hidden rounded-lg border bg-card"
+        onContextMenu={(e) => e.preventDefault()}
+      >
         <Table className="border-separate border-spacing-0">
           <TableHeader>
             <TableRow className="hover:bg-transparent">

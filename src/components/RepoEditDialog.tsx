@@ -21,11 +21,14 @@ export function RepoEditDialog({
   repo,
   onClose,
   onSaved,
+  onDelete,
 }: {
   token: string;
   repo: Repo | null;
   onClose: () => void;
   onSaved: () => void;
+  /** 编辑模式下显示「删除仓库」按钮，由父级执行删除（含确认弹窗） */
+  onDelete?: (repo: Repo) => void;
 }) {
   const { t } = useTranslation();
   const [name, setName] = useState(repo?.name ?? "");
@@ -125,6 +128,11 @@ export function RepoEditDialog({
           </div>
         </div>
         <DialogFooter>
+          {repo && onDelete && (
+            <Button variant="destructive" className="mr-auto" onClick={() => onDelete(repo)}>
+              {t("deleteRepo")}
+            </Button>
+          )}
           <Button variant="outline" onClick={onClose}>
             {t("cancel")}
           </Button>

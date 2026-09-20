@@ -455,3 +455,34 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 }
+
+/// 命令层测试辅助：tauri::test 的 mock 运行时让 Tauri 命令（State 提取）可脱离窗口直接调用
+#[cfg(test)]
+pub(crate) mod testutil {
+    use super::*;
+    use std::sync::Arc;
+    use tauri::Manager;
+
+    /// 独立临时数据库 + 挂载了 AppState 的 mock 应用；root 供调用方清理与构造路径
+    pub(crate) fn open_mock_app(
+        tag: &str,
+    ) -> (tauri::App<tauri::test::MockRuntime>, Arc<AppState>, PathBuf) {
+        let root =
+            std::env::temp_dir().join(format!("grs-cmd-{tag}-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&root).unwrap();
+        let app = tauri::test::mock_app();
+        let state = Arc::new(AppState::open(root.join("app.db")).unwrap());
+        app.manage(state.clone());
+        (app, state, root)
+    }
+
+    /// 直接注入有效会话令牌（登录流程本身由 auth 命令测试覆盖）
+    pub(crate) fn insert_session(state: &AppState, token: &str) {
+        let conn = lock(&state.conn);
+        conn.execute(
+            "INSERT INTO sessions (token, username, expires_at) VALUES (?1, 'admin', ?2)",
+            params![token, chrono::Utc::now().timestamp() + 3600],
+        )
+        .unwrap();
+    }
+}

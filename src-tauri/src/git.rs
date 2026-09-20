@@ -7,7 +7,7 @@ use rusqlite::params;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -27,6 +27,49 @@ struct GitStep {
 
 /// git_args 注入的配置前缀参数个数（两组 -c k v）
 const GIT_CONFIG_PREFIX: usize = 4;
+
+/// GUI 进程（macOS 从 Finder/Dock 启动）继承的 PATH 极简（/usr/bin:/bin:/usr/sbin:/sbin），
+/// 用户级安装的 git-lfs（Homebrew `/opt/homebrew/bin` 等）不在其中，`git lfs` 子命令
+/// 因找不到 git-lfs 可执行文件而误报未安装。为 git 子进程补充常见安装目录：
+/// 目录存在且未收录才追加，原 PATH 条目按原顺序保留在前（系统 git 仍优先）。
+fn augmented_path() -> String {
+    const EXTRA: &[&str] = &[
+        "/opt/homebrew/bin",              // Homebrew（Apple Silicon）
+        "/opt/homebrew/sbin",
+        "/usr/local/bin",                 // Homebrew（Intel）与常规用户安装
+        "/usr/local/sbin",
+        "/opt/local/bin",                 // MacPorts
+        "/opt/local/sbin",
+        "/home/linuxbrew/.linuxbrew/bin", // Linuxbrew
+        "/home/linuxbrew/.linuxbrew/sbin",
+    ];
+    let mut parts: Vec<PathBuf> =
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect();
+    for dir in EXTRA {
+        let p = Path::new(dir);
+        if p.is_dir() && !parts.iter().any(|e| e.as_path() == p) {
+            parts.push(p.to_path_buf());
+        }
+    }
+    std::env::join_paths(&parts)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// git 子进程使用的 PATH（进程存活期间环境不变，进程内缓存一次）
+fn child_path() -> &'static str {
+    static CHILD_PATH: OnceLock<String> = OnceLock::new();
+    CHILD_PATH.get_or_init(augmented_path)
+}
+
+/// git 子进程统一环境：禁用交互式凭据输入 + 补充 PATH（图形界面启动时 PATH 极简）
+fn apply_git_env(cmd: &mut Command) {
+    cmd.env("GIT_TERMINAL_PROMPT", "0");
+    let p = child_path();
+    if !p.is_empty() {
+        cmd.env("PATH", p);
+    }
+}
 
 /// 网络命令统一加低速中断配置（HTTP 停滞 120s 判死）；本地命令不受影响
 fn git_args(args: &[&str]) -> Vec<String> {
@@ -95,7 +138,7 @@ pub(crate) fn perform_git_sync(
     let lfs_available = {
         let mut cmd = Command::new("git");
         cmd.args(["lfs", "version"]);
-        cmd.env("GIT_TERMINAL_PROMPT", "0");
+        apply_git_env(&mut cmd);
         cmd.stdout(Stdio::null()).stderr(Stdio::null());
         cmd.status().map(|s| s.success()).unwrap_or(false)
     };
@@ -167,8 +210,9 @@ pub(crate) fn perform_git_sync(
     push_refs.push("+refs/tags/*:refs/tags/*".into());
 
     // 1 对多推送：对每个备份目标依次推送，状态按目标独立记录；
-    // 单个目标失败不阻断其余目标（最后汇总整体状态为 failed）
+    // 单个目标失败不阻断其余目标（最后汇总整体状态为 failed，失败原因并入消息供日志记录）
     let mut any_fail = false;
+    let mut target_errors: Vec<String> = Vec::new();
     for (remote, url) in targets {
         if lock(&state.stop_requested).contains(repo_id) {
             reset_running_targets(state, repo_id);
@@ -192,6 +236,11 @@ pub(crate) fn perform_git_sync(
                     return ("stopped".into(), tr(lang, "manually-stopped"));
                 }
                 any_fail = true;
+                target_errors.push(tr_a(
+                    lang,
+                    "push-target-failed",
+                    &[("remote", remote), ("err", &e)],
+                ));
                 target_status = ("failed".to_string(), Some(e));
             }
             Ok(_) => {
@@ -215,6 +264,9 @@ pub(crate) fn perform_git_sync(
 
     let mut parts = done;
     parts.extend(warnings);
+    if any_fail {
+        parts.extend(target_errors);
+    }
     let status = if any_fail { "failed" } else { "success" };
     (status.into(), parts.join(lang.sep()))
 }
@@ -240,7 +292,7 @@ fn run_git(
 ) -> Result<String, String> {
     let mut cmd = Command::new("git");
     cmd.args(args);
-    cmd.env("GIT_TERMINAL_PROMPT", "0");
+    apply_git_env(&mut cmd);
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
@@ -371,6 +423,44 @@ mod tests {
         assert_eq!(git_display_cmd(&[]), "git");
     }
 
+    /// PATH 增强（macOS 图形界面启动找不到 Homebrew git-lfs 的修复）：
+    /// 原 PATH 条目按原顺序原样保留在前（用户 PATH 可能本就含重复，不去重），
+    /// 补充目录存在且未收录时才追加，追加部分自身无重复
+    #[test]
+    fn augmented_path_keeps_original_and_appends_existing_extras() {
+        let orig = std::env::var("PATH").unwrap_or_default();
+        let orig_parts: Vec<PathBuf> = std::env::split_paths(&orig).collect();
+        let aug = augmented_path();
+        let aug_parts: Vec<PathBuf> = std::env::split_paths(&aug).collect();
+        assert_eq!(
+            &aug_parts[..orig_parts.len()],
+            &orig_parts[..],
+            "原 PATH 条目应按原顺序保留在前"
+        );
+        let extras = &aug_parts[orig_parts.len()..];
+        let mut seen = std::collections::HashSet::new();
+        for p in extras {
+            assert!(seen.insert(p), "追加部分出现重复条目: {p:?}");
+        }
+        // 追加的都是「目录存在且原 PATH 未收录」的常见安装目录
+        const EXTRA: &[&str] = &[
+            "/opt/homebrew/bin",
+            "/opt/homebrew/sbin",
+            "/usr/local/bin",
+            "/usr/local/sbin",
+            "/opt/local/bin",
+            "/opt/local/sbin",
+            "/home/linuxbrew/.linuxbrew/bin",
+            "/home/linuxbrew/.linuxbrew/sbin",
+        ];
+        for p in extras {
+            assert!(
+                EXTRA.iter().any(|d| Path::new(d) == p.as_path()),
+                "追加了预期之外的条目: {p:?}"
+            );
+        }
+    }
+
     /// 全本地端到端：真实 git 子进程走完「拉取 → 更新 → 推送」流水线。
     /// 源仓库与目标 bare 仓库均用本地路径，不依赖网络与凭据；
     /// 第二次同步走 fetch 更新路径（本地中转已存在），验证增量推送到目标。
@@ -497,6 +587,107 @@ mod tests {
         assert!(!message.is_empty(), "失败应带可读消息");
         // 失败后不应留有 git 子进程句柄
         assert!(lock(&state.sync_procs).is_empty());
+        drop(state);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 多目标推送：一个目标失败（路径不可写）不影响另一个目标成功，
+    /// 成功目标的时间已更新、失败目标带错误消息；整体状态为 failed
+    #[test]
+    fn perform_git_sync_pushes_to_all_targets_independently() {
+        use crate::state::AppState;
+
+        let root = std::env::temp_dir().join(format!("grs-multi-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&root).unwrap();
+        let base = root.join("base");
+        let source = root.join("src");
+        let good = root.join("good.git");
+        // 坏目标：父路径是一个普通文件，push 必败
+        let bad_parent = root.join("not-a-dir");
+        std::fs::write(&bad_parent, "x").unwrap();
+        let bad = bad_parent.join("bad.git");
+        let git = |args: &[&str], cwd: &Path| {
+            let st = std::process::Command::new("git")
+                .args(args)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .current_dir(cwd)
+                .status()
+                .unwrap();
+            assert!(st.success(), "git {:?} 执行失败", args);
+        };
+        std::fs::create_dir_all(&source).unwrap();
+        git(&["init", "-q", "-b", "main"], &source);
+        git(&["config", "user.name", "t"], &source);
+        git(&["config", "user.email", "t@t"], &source);
+        std::fs::write(source.join("a.txt"), "v1").unwrap();
+        git(&["add", "."], &source);
+        git(&["commit", "-q", "-m", "v1"], &source);
+        git(&["init", "-q", "--bare", good.to_str().unwrap()], &root);
+
+        let state = AppState::open(root.join("app.db")).unwrap();
+        {
+            let conn = lock(&state.conn);
+            conn.execute(
+                "INSERT INTO repos (id, name, source) VALUES ('r1', 'demo', ?1)",
+                params![source.to_string_lossy()],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO sync_targets (repo_id, remote, url) VALUES ('r1', 'good', ?1)",
+                params![good.to_string_lossy()],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO sync_targets (repo_id, remote, url) VALUES ('r1', 'bad', ?1)",
+                params![bad.to_string_lossy()],
+            )
+            .unwrap();
+        }
+        let repo = Repo {
+            id: "r1".to_string(),
+            name: "demo".to_string(),
+            source: source.to_string_lossy().to_string(),
+            last_synced: None,
+            last_status: "idle".to_string(),
+            last_message: None,
+            targets: Vec::new(),
+        };
+        let targets = vec![
+            ("bad".to_string(), bad.to_string_lossy().to_string()),
+            ("good".to_string(), good.to_string_lossy().to_string()),
+        ];
+
+        let (status, message) =
+            perform_git_sync(&state, "r1", &repo, &targets, &base, crate::lang::Lang::Zh);
+        assert_eq!(status, "failed", "任一目标失败整体为 failed: {message}");
+        // 失败原因并入整体消息（按目标格式化），供表格悬停与操作日志记录
+        assert!(message.contains("推送"), "消息应含推送步骤: {message}");
+        assert!(message.contains("bad"), "消息应含失败目标的按目标错误: {message}");
+
+        let row = |remote: &str| {
+            let conn = lock(&state.conn);
+            conn.query_row(
+                "SELECT last_status, last_message, last_synced FROM sync_targets
+                 WHERE repo_id = 'r1' AND remote = ?1",
+                params![remote],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, Option<String>>(1)?,
+                        r.get::<_, Option<i64>>(2)?,
+                    ))
+                },
+            )
+            .unwrap()
+        };
+        let (good_status, _, good_ts) = row("good");
+        assert_eq!(good_status, "success", "好目标不受坏目标影响");
+        assert!(good_ts.is_some(), "成功目标时间已更新");
+        let (bad_status, bad_msg, bad_ts) = row("bad");
+        assert_eq!(bad_status, "failed");
+        assert!(bad_msg.is_some(), "失败目标带错误消息");
+        assert!(bad_ts.is_none(), "失败目标不更新时间");
+
         drop(state);
         std::fs::remove_dir_all(&root).ok();
     }

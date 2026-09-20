@@ -31,6 +31,21 @@ const STALE_DAYS = [1, 3, 7, 30];
 /** 只有 origin（没有任何备份目标）或连源地址都没有的仓库视为未配置，不参与同步 */
 const isUnconfigured = (r: Repo) => !r.source || r.targets.length === 0;
 
+/**
+ * 同步范围过滤（与后端 select_stale_ids 语义一致）：all 显示全部；
+ * N 天范围内仅保留已配置且「从未同步或上次同步早于 N 天前」的仓库。
+ * 表格与「开始同步」按钮的计数共用同一份过滤结果，保证所见即可同步
+ */
+export function filterStale(repos: Repo[], stale: string): Repo[] {
+  if (stale === "all") return repos;
+  const days = Number(stale);
+  if (!Number.isFinite(days) || days <= 0) return repos;
+  const cutoff = Date.now() - days * 86400_000;
+  return repos.filter(
+    (r) => !isUnconfigured(r) && (r.lastSynced === null || r.lastSynced < cutoff),
+  );
+}
+
 export function SyncPage({ token }: { token: string }) {
   const { t } = useTranslation();
   const [repos, setRepos] = useState<Repo[]>([]);
@@ -40,6 +55,7 @@ export function SyncPage({ token }: { token: string }) {
   const [deleteTarget, setDeleteTarget] = useState<Repo | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; repo: Repo } | null>(null);
   const [error, setError] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
 
   // 全量发现（扫描基地址 + 登记新仓库）：仅在页面挂载和手动刷新时执行
   const load = useCallback(async () => {
@@ -80,12 +96,16 @@ export function SyncPage({ token }: { token: string }) {
     };
   }, [load]);
 
-  const staleIds = useMemo(() => {
-    const days = stale === "all" ? 0 : Number(stale);
-    const inRange = (r: Repo) =>
-      days === 0 || r.lastSynced === null || r.lastSynced < Date.now() - days * 86400_000;
-    return repos.filter((r) => !isUnconfigured(r) && inRange(r)).map((r) => r.id);
-  }, [repos, stale]);
+  // 范围过滤结果：表格展示与「开始同步」的 id 列表共用（范围模式两者一致）
+  const visibleRepos = useMemo(() => filterStale(repos, stale), [repos, stale]);
+
+  const staleIds = useMemo(
+    () =>
+      visibleRepos
+        .filter((r) => stale !== "all" || !isUnconfigured(r))
+        .map((r) => r.id),
+    [visibleRepos, stale],
+  );
 
   async function handleStartSync() {
     setError("");
@@ -108,6 +128,17 @@ export function SyncPage({ token }: { token: string }) {
     }
   }
 
+  // 手动刷新：重新扫描基地址并加载最新列表（MCP 等其他入口的改动借此可见）
+  async function handleRefresh() {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await load();
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
   async function handleDelete() {
     if (!deleteTarget) return;
     setError("");
@@ -123,6 +154,8 @@ export function SyncPage({ token }: { token: string }) {
 
   function openMenu(e: React.MouseEvent, repo: Repo) {
     e.preventDefault();
+    // 阻止冒泡到 window 的菜单关闭监听：连续右键另一行时菜单直接切换而非消失
+    e.stopPropagation();
     setMenu({ x: e.clientX, y: e.clientY, repo });
   }
 
@@ -135,7 +168,10 @@ export function SyncPage({ token }: { token: string }) {
         {
           label: t("startSync"),
           onSelect: () => {
-            void api.startSync(token, [menu.repo.id]).then(load);
+            void api
+              .startSync(token, [menu.repo.id])
+              .then(load)
+              .catch((err) => setError(String(err)));
           },
         },
         { label: t("confirmDelete"), danger: true, onSelect: () => setDeleteTarget(menu.repo) },
@@ -183,14 +219,18 @@ export function SyncPage({ token }: { token: string }) {
   return (
     <div className="flex h-full flex-col p-6">
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <Button onClick={handleStartSync} disabled={staleIds.length === 0}>
-          <IconRefresh />
-          {stale === "all" ? t("startSync") : t("startSyncCount", { count: staleIds.length })}
-        </Button>
-        <Button variant="outline" onClick={handleStopSync} disabled={!running}>
-          <IconSquare className="h-3.5 w-3.5" />
-          {t("stopSync")}
-        </Button>
+        {/* 开始/停止按同步状态互斥切换：同一时刻只显示其中一个 */}
+        {running ? (
+          <Button variant="outline" onClick={handleStopSync}>
+            <IconSquare className="h-3.5 w-3.5" />
+            {t("stopSync")}
+          </Button>
+        ) : (
+          <Button onClick={handleStartSync} disabled={staleIds.length === 0}>
+            <IconRefresh />
+            {stale === "all" ? t("startSync") : t("startSyncCount", { count: staleIds.length })}
+          </Button>
+        )}
         <Select value={stale} onValueChange={setStale}>
           <SelectTrigger className="w-48">
             <SelectValue placeholder={t("staleAll")} />
@@ -205,6 +245,10 @@ export function SyncPage({ token }: { token: string }) {
           </SelectContent>
         </Select>
         <div className="flex-1" />
+        <Button variant="outline" onClick={() => void handleRefresh()} disabled={refreshing}>
+          <IconRefresh />
+          {t("refreshRepos")}
+        </Button>
         <Button variant="secondary" onClick={() => setEditor({ repo: null })}>
           <IconPlus />
           {t("addRepo")}
@@ -213,7 +257,11 @@ export function SyncPage({ token }: { token: string }) {
 
       {error && <p className="mb-3 text-sm text-destructive">{error}</p>}
 
-      <div className="min-h-0 flex-1 overflow-hidden rounded-lg border bg-card">
+      {/* 容器级阻止右键默认行为：表头/空白区右键不再弹出 WebView 原生菜单 */}
+      <div
+        className="min-h-0 flex-1 overflow-hidden rounded-lg border bg-card"
+        onContextMenu={(e) => e.preventDefault()}
+      >
         <Table className="border-separate border-spacing-0">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
@@ -224,14 +272,14 @@ export function SyncPage({ token }: { token: string }) {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {repos.length === 0 ? (
+            {visibleRepos.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={5} className="h-32 text-center text-muted-foreground">
-                  {t("syncEmpty")}
+                  {stale === "all" ? t("syncEmpty") : t("staleEmpty")}
                 </TableCell>
               </TableRow>
             ) : (
-              repos.map((repo) => {
+              visibleRepos.map((repo) => {
                 const badge = statusBadge[repo.lastStatus] ?? statusBadge.idle;
                 return (
                   <TableRow
@@ -276,6 +324,11 @@ export function SyncPage({ token }: { token: string }) {
           onSaved={() => {
             setEditor(null);
             void load();
+          }}
+          onDelete={(r) => {
+            // 弹窗内的删除入口：关闭编辑，转由既有确认弹窗执行删除
+            setEditor(null);
+            setDeleteTarget(r);
           }}
         />
       )}

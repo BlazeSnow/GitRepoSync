@@ -20,10 +20,13 @@ export function ContextMenu({
 }) {
   useEffect(() => {
     const close = () => onClose();
+    // 菜单外按下鼠标即关闭（mousedown 比 click 更跟手）；resize 换位置后关闭
+    window.addEventListener("mousedown", close);
     window.addEventListener("click", close);
     window.addEventListener("contextmenu", close);
     window.addEventListener("resize", close);
     return () => {
+      window.removeEventListener("mousedown", close);
       window.removeEventListener("click", close);
       window.removeEventListener("contextmenu", close);
       window.removeEventListener("resize", close);
@@ -40,7 +43,12 @@ export function ContextMenu({
       className="fixed z-50 min-w-40 rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
       style={{ left, top }}
       onClick={(e) => e.stopPropagation()}
-      onContextMenu={(e) => e.preventDefault()}
+      // 菜单内的按下/右键不冒泡到 window 的关闭监听，避免菜单瞬间自关
+      onMouseDown={(e) => e.stopPropagation()}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
     >
       {items.map((item) => (
         <button

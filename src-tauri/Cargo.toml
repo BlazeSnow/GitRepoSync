@@ -1,6 +1,6 @@
 [package]
 name = "git-repo-sync"
-version = "1.0.0-beta.2"
+version = "1.0.0-beta.3"
 description = "Git Repo Sync - 跨平台 Git 仓库同步工具"
 authors = ["BlazeSnow"]
 edition = "2021"
@@ -29,6 +29,10 @@ windows-sys = { version = "0.61", features = [
   "Win32_System_Console",
   "Win32_Storage_FileSystem",
 ] }
+
+# 仅测试：tauri::test 的 mock 运行时，用于命令层（State 提取）单元测试
+[dev-dependencies]
+tauri = { version = "2", features = ["test"] }
 
 [profile.release]
 strip = true

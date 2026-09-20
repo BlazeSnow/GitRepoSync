@@ -4,7 +4,7 @@ use crate::state::{lock, normalize_base_dir, AppState, OperationLog};
 use rusqlite::params;
 use serde::Serialize;
 use std::sync::Arc;
-use tauri::{AppHandle, State};
+use tauri::State;
 use uuid::Uuid;
 
 #[derive(Serialize)]
@@ -16,8 +16,8 @@ pub struct AppInfo {
 }
 
 #[tauri::command]
-pub fn get_app_info(
-    app: AppHandle,
+pub fn get_app_info<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     state: State<'_, Arc<AppState>>,
     token: String,
 ) -> Result<AppInfo, String> {
@@ -124,4 +124,54 @@ pub fn list_operation_logs(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
     Ok(logs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::testutil::{insert_session, open_mock_app};
+    use std::sync::Arc;
+    use tauri::Manager;
+
+    /// 命令层：应用信息、基地址读写（~ 展开与空值拒绝）、MCP 配置与 APIKEY 重置、日志列表
+    #[test]
+    fn settings_commands_roundtrip() {
+        let (app, state, root) = open_mock_app("settings");
+        let st = app.state::<Arc<AppState>>();
+        insert_session(state.as_ref(), "tok");
+
+        // 应用信息：版本与包名非空
+        let info = get_app_info(app.handle().clone(), st.clone(), "tok".into()).unwrap();
+        assert!(!info.version.is_empty());
+        assert!(!info.name.is_empty());
+
+        // 基地址：~ 输入展开为完整路径；空值拒绝
+        set_base_dir(st.clone(), "tok".into(), "~/repo/custom".into()).unwrap();
+        assert_eq!(
+            get_base_dir(st.clone(), "tok".into()).unwrap(),
+            dirs::home_dir()
+                .unwrap()
+                .join("repo/custom")
+                .to_string_lossy()
+        );
+        assert!(set_base_dir(st.clone(), "tok".into(), "   ".into()).is_err());
+
+        // MCP 配置与 APIKEY 重置：新 key 生效且与旧值不同
+        let key1 = get_mcp_config(st.clone(), "tok".into()).unwrap();
+        assert!(key1.api_key.starts_with("grs_"));
+        let key2 = regenerate_mcp_api_key(st.clone(), "tok".into()).unwrap();
+        assert_ne!(key1.api_key, key2, "重置后的 APIKEY 应不同");
+        assert_eq!(get_mcp_config(st.clone(), "tok".into()).unwrap().api_key, key2);
+
+        // 操作日志：倒序返回且 limit 生效
+        list_operation_logs(st.clone(), "tok".into(), Some(5)).unwrap();
+
+        // 无效令牌拒绝
+        assert!(get_base_dir(st.clone(), "bad".into()).is_err());
+
+        drop(st);
+        drop(app);
+        drop(state);
+        std::fs::remove_dir_all(&root).ok();
+    }
 }

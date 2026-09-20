@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import type { Repo } from "@/lib/types";
 
 // api 与 Tauri 事件打桩：组件测试不触碰后端
@@ -20,10 +20,24 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import { api } from "@/lib/api";
-import { SyncPage } from "./SyncPage";
+import { SyncPage, filterStale } from "./SyncPage";
 
 // vitest 非 globals 模式下 testing-library 不自动卸载，需手动清理
 afterEach(cleanup);
+
+beforeAll(() => {
+  // Radix Select 依赖的浏览器 API 在 jsdom 中缺失：滚动、尺寸观察与指针捕获打桩
+  Element.prototype.scrollIntoView = vi.fn() as unknown as typeof Element.prototype.scrollIntoView;
+  Element.prototype.hasPointerCapture = () => false;
+  Element.prototype.setPointerCapture = () => {};
+  Element.prototype.releasePointerCapture = () => {};
+  class ResizeObserverStub {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = ResizeObserverStub;
+});
 
 function repo(partial: Partial<Repo>): Repo {
   return {
@@ -37,6 +51,14 @@ function repo(partial: Partial<Repo>): Repo {
     ...partial,
   };
 }
+
+const backupTarget: Repo["targets"][number] = {
+  remote: "backup",
+  url: "https://gitlab.com/u/x.git",
+  lastStatus: "idle",
+  lastMessage: null,
+  lastSynced: null,
+};
 
 beforeEach(async () => {
   vi.clearAllMocks();
@@ -117,4 +139,48 @@ it("配置仓库从未同步且「停止同步」在无运行任务时禁用", a
   render(<SyncPage token="tok" />);
   expect(await screen.findByText("从未")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "停止同步" })).toBeDisabled();
+});
+
+it("filterStale：all 显示全部；N 天范围仅保留已配置且超期或从未同步的仓库", () => {
+  const now = Date.now();
+  const day = 86_400_000;
+  const repos = [
+    repo({ id: "fresh", name: "fresh", lastSynced: now, targets: [backupTarget] }),
+    repo({ id: "stale", name: "stale", lastSynced: now - 2 * day, targets: [backupTarget] }),
+    repo({ id: "never", name: "never", lastSynced: null, targets: [backupTarget] }),
+    repo({ id: "unconf", name: "unconf", source: "", targets: [] }),
+  ];
+  expect(filterStale(repos, "all")).toHaveLength(4);
+  expect(filterStale(repos, "1").map((r) => r.id)).toEqual(["stale", "never"]);
+  // 30 天口径下 2 天前同步过的仓库已足够「新鲜」，只剩从未同步的
+  expect(filterStale(repos, "30").map((r) => r.id)).toEqual(["never"]);
+});
+
+it("范围下拉选择 N 天后，表格仅显示符合范围的仓库且按钮计数一致", async () => {
+  const now = Date.now();
+  const day = 86_400_000;
+  vi.mocked(api.discoverRepos).mockResolvedValue([
+    repo({ id: "fresh", name: "fresh", lastSynced: now, targets: [backupTarget] }),
+    repo({ id: "stale", name: "stale", lastSynced: now - 2 * day, targets: [backupTarget] }),
+  ]);
+  vi.mocked(api.listRepos).mockResolvedValue([]);
+
+  render(<SyncPage token="tok" />);
+  expect(await screen.findByText("fresh")).toBeInTheDocument();
+  expect(screen.getByText("stale")).toBeInTheDocument();
+
+  // Radix Select：pointerDown（左键 + mouse）打开下拉
+  fireEvent.pointerDown(screen.getByRole("combobox"), {
+    button: 0,
+    ctrlKey: false,
+    pointerType: "mouse",
+  });
+  // 选项选中：jsdom 下 Radix 的 onClick 路径（指针类型非 mouse）直接触发选中
+  const option = await screen.findByRole("option", { name: "1 天内未同步" });
+  fireEvent.click(option);
+
+  // 表格只剩超期的 stale，按钮计数同步为 1
+  await waitFor(() => expect(screen.queryByText("fresh")).not.toBeInTheDocument());
+  expect(screen.getByText("stale")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "开始同步（1 个）" })).toBeInTheDocument();
 });

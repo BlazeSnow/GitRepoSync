@@ -7,7 +7,7 @@ use rusqlite::params;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -27,6 +27,49 @@ struct GitStep {
 
 /// git_args 注入的配置前缀参数个数（两组 -c k v）
 const GIT_CONFIG_PREFIX: usize = 4;
+
+/// GUI 进程（macOS 从 Finder/Dock 启动）继承的 PATH 极简（/usr/bin:/bin:/usr/sbin:/sbin），
+/// 用户级安装的 git-lfs（Homebrew `/opt/homebrew/bin` 等）不在其中，`git lfs` 子命令
+/// 因找不到 git-lfs 可执行文件而误报未安装。为 git 子进程补充常见安装目录：
+/// 目录存在且未收录才追加，原 PATH 条目按原顺序保留在前（系统 git 仍优先）。
+fn augmented_path() -> String {
+    const EXTRA: &[&str] = &[
+        "/opt/homebrew/bin",              // Homebrew（Apple Silicon）
+        "/opt/homebrew/sbin",
+        "/usr/local/bin",                 // Homebrew（Intel）与常规用户安装
+        "/usr/local/sbin",
+        "/opt/local/bin",                 // MacPorts
+        "/opt/local/sbin",
+        "/home/linuxbrew/.linuxbrew/bin", // Linuxbrew
+        "/home/linuxbrew/.linuxbrew/sbin",
+    ];
+    let mut parts: Vec<PathBuf> =
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect();
+    for dir in EXTRA {
+        let p = Path::new(dir);
+        if p.is_dir() && !parts.iter().any(|e| e.as_path() == p) {
+            parts.push(p.to_path_buf());
+        }
+    }
+    std::env::join_paths(&parts)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// git 子进程使用的 PATH（进程存活期间环境不变，进程内缓存一次）
+fn child_path() -> &'static str {
+    static CHILD_PATH: OnceLock<String> = OnceLock::new();
+    CHILD_PATH.get_or_init(augmented_path)
+}
+
+/// git 子进程统一环境：禁用交互式凭据输入 + 补充 PATH（图形界面启动时 PATH 极简）
+fn apply_git_env(cmd: &mut Command) {
+    cmd.env("GIT_TERMINAL_PROMPT", "0");
+    let p = child_path();
+    if !p.is_empty() {
+        cmd.env("PATH", p);
+    }
+}
 
 /// 网络命令统一加低速中断配置（HTTP 停滞 120s 判死）；本地命令不受影响
 fn git_args(args: &[&str]) -> Vec<String> {
@@ -95,7 +138,7 @@ pub(crate) fn perform_git_sync(
     let lfs_available = {
         let mut cmd = Command::new("git");
         cmd.args(["lfs", "version"]);
-        cmd.env("GIT_TERMINAL_PROMPT", "0");
+        apply_git_env(&mut cmd);
         cmd.stdout(Stdio::null()).stderr(Stdio::null());
         cmd.status().map(|s| s.success()).unwrap_or(false)
     };
@@ -240,7 +283,7 @@ fn run_git(
 ) -> Result<String, String> {
     let mut cmd = Command::new("git");
     cmd.args(args);
-    cmd.env("GIT_TERMINAL_PROMPT", "0");
+    apply_git_env(&mut cmd);
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
@@ -369,6 +412,44 @@ mod tests {
         assert_eq!(git_display_cmd(&args), "fetch");
         assert_eq!(git_display_cmd(&["push".to_string()]), "push");
         assert_eq!(git_display_cmd(&[]), "git");
+    }
+
+    /// PATH 增强（macOS 图形界面启动找不到 Homebrew git-lfs 的修复）：
+    /// 原 PATH 条目按原顺序原样保留在前（用户 PATH 可能本就含重复，不去重），
+    /// 补充目录存在且未收录时才追加，追加部分自身无重复
+    #[test]
+    fn augmented_path_keeps_original_and_appends_existing_extras() {
+        let orig = std::env::var("PATH").unwrap_or_default();
+        let orig_parts: Vec<PathBuf> = std::env::split_paths(&orig).collect();
+        let aug = augmented_path();
+        let aug_parts: Vec<PathBuf> = std::env::split_paths(&aug).collect();
+        assert_eq!(
+            &aug_parts[..orig_parts.len()],
+            &orig_parts[..],
+            "原 PATH 条目应按原顺序保留在前"
+        );
+        let extras = &aug_parts[orig_parts.len()..];
+        let mut seen = std::collections::HashSet::new();
+        for p in extras {
+            assert!(seen.insert(p), "追加部分出现重复条目: {p:?}");
+        }
+        // 追加的都是「目录存在且原 PATH 未收录」的常见安装目录
+        const EXTRA: &[&str] = &[
+            "/opt/homebrew/bin",
+            "/opt/homebrew/sbin",
+            "/usr/local/bin",
+            "/usr/local/sbin",
+            "/opt/local/bin",
+            "/opt/local/sbin",
+            "/home/linuxbrew/.linuxbrew/bin",
+            "/home/linuxbrew/.linuxbrew/sbin",
+        ];
+        for p in extras {
+            assert!(
+                EXTRA.iter().any(|d| Path::new(d) == p.as_path()),
+                "追加了预期之外的条目: {p:?}"
+            );
+        }
     }
 
     /// 全本地端到端：真实 git 子进程走完「拉取 → 更新 → 推送」流水线。

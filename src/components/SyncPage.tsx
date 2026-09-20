@@ -66,9 +66,10 @@ export function filterStale(repos: Repo[], stale: string): Repo[] {
   );
 }
 
-/** 表格排序状态：key 为 null 表示默认（后端返回的名称序） */
+/** 可排序的列；表格排序状态 key 为 null 表示默认（后端返回的名称升序） */
+export type SortKey = "name" | "status" | "lastSynced";
 export interface SortSpec {
-  key: "status" | "lastSynced" | null;
+  key: SortKey | null;
   dir: "asc" | "desc";
 }
 
@@ -83,6 +84,7 @@ const STATUS_RANK: Record<string, number> = {
 
 /**
  * 表格排序（纯前端，作用于范围过滤后的可见行）：
+ * - 名称：与后端默认一致的字符串序（升序与默认相同），降序反转；
  * - 状态：升序按问题优先（失败 > 同步中 > 已停止 > 未同步 > 成功），降序反转；
  * - 上次同步：升序「从未同步」最先、其后按时间从旧到新，降序相反；
  * - 未配置仓库不参与方向反转，固定排在最后；
@@ -96,7 +98,10 @@ export function sortRepos(repos: Repo[], sort: SortSpec): Repo[] {
   for (const r of repos) (isUnconfigured(r) ? unconfiguredRows : configured).push(r);
   configured.sort((a, b) => {
     let cmp: number;
-    if (sort.key === "lastSynced") {
+    if (sort.key === "name") {
+      // 与 SQLite ORDER BY name（UTF-8 字节序）保持一致的字符串比较
+      cmp = a.name === b.name ? 0 : a.name < b.name ? -1 : 1;
+    } else if (sort.key === "lastSynced") {
       const av = a.lastSynced ?? Number.NEGATIVE_INFINITY;
       const bv = b.lastSynced ?? Number.NEGATIVE_INFINITY;
       cmp = av === bv ? 0 : av < bv ? -1 : 1;
@@ -111,7 +116,7 @@ export function sortRepos(repos: Repo[], sort: SortSpec): Repo[] {
 }
 
 /** 表头点击的三态切换：未排 → 升序 → 降序 → 恢复默认名称序 */
-export function toggleSort(current: SortSpec, key: "status" | "lastSynced"): SortSpec {
+export function toggleSort(current: SortSpec, key: SortKey): SortSpec {
   if (current.key !== key) return { key, dir: "asc" };
   if (current.dir === "asc") return { key, dir: "desc" };
   return { key: null, dir: "asc" };
@@ -346,7 +351,17 @@ export function SyncPage({ token }: { token: string }) {
         <Table className="border-separate border-spacing-0">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead className="sticky top-0 z-10 w-44 bg-card">{t("colRepo")}</TableHead>
+              <TableHead
+                className={sortHeaderClass("w-44", sort.key === "name")}
+                aria-sort={
+                  sort.key === "name" ? (sort.dir === "asc" ? "ascending" : "descending") : "none"
+                }
+                title={t("sortHint")}
+                onClick={() => setSort((s) => toggleSort(s, "name"))}
+              >
+                {t("colRepo")}
+                {sort.key === "name" && <span className="ml-1">{sort.dir === "asc" ? "↑" : "↓"}</span>}
+              </TableHead>
               <TableHead className="sticky top-0 z-10 bg-card">{t("colAddress")}</TableHead>
               <TableHead
                 className={sortHeaderClass("w-24", sort.key === "status")}

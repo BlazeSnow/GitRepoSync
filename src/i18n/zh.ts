@@ -32,6 +32,7 @@ export const zh = {
   colTarget: "目标地址",
   colStatus: "状态",
   colLastSynced: "上次同步",
+  sortHint: "点击切换排序",
   notConfigured: "未配置",
   statusIdle: "未同步",
   statusRunning: "同步中",

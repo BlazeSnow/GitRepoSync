@@ -25,8 +25,18 @@ import { ContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { RepoEditDialog } from "@/components/RepoEditDialog";
 import { DeleteRepoDialog } from "@/components/DeleteRepoDialog";
 import { IconPlus, IconRefresh, IconSquare } from "@/components/icons";
+import { cn } from "@/lib/utils";
 
 const STALE_DAYS = [1, 3, 7, 30];
+
+/** 可排序表头样式：保留吸顶、列宽与背景，加指针提示；激活排序时前景高亮 */
+function sortHeaderClass(width: string, active: boolean): string {
+  return cn(
+    "sticky top-0 z-10 bg-card cursor-pointer select-none",
+    width,
+    active && "text-foreground",
+  );
+}
 
 /** 同步范围的 localStorage 键：切页（组件卸载）后保持上次选择 */
 const STALE_RANGE_KEY = "grs_stale_range";
@@ -56,6 +66,57 @@ export function filterStale(repos: Repo[], stale: string): Repo[] {
   );
 }
 
+/** 表格排序状态：key 为 null 表示默认（后端返回的名称序） */
+export interface SortSpec {
+  key: "status" | "lastSynced" | null;
+  dir: "asc" | "desc";
+}
+
+/** 状态排序权重（升序 = 问题优先）：失败 > 同步中 > 已停止 > 未同步 > 成功 */
+const STATUS_RANK: Record<string, number> = {
+  failed: 0,
+  running: 1,
+  stopped: 2,
+  idle: 3,
+  success: 4,
+};
+
+/**
+ * 表格排序（纯前端，作用于范围过滤后的可见行）：
+ * - 状态：升序按问题优先（失败 > 同步中 > 已停止 > 未同步 > 成功），降序反转；
+ * - 上次同步：升序「从未同步」最先、其后按时间从旧到新，降序相反；
+ * - 未配置仓库不参与方向反转，固定排在最后；
+ * - 同分时保持后端的名称顺序（Array.prototype.sort 稳定）
+ */
+export function sortRepos(repos: Repo[], sort: SortSpec): Repo[] {
+  if (sort.key === null) return repos;
+  const sign = sort.dir === "asc" ? 1 : -1;
+  const configured: Repo[] = [];
+  const unconfiguredRows: Repo[] = [];
+  for (const r of repos) (isUnconfigured(r) ? unconfiguredRows : configured).push(r);
+  configured.sort((a, b) => {
+    let cmp: number;
+    if (sort.key === "lastSynced") {
+      const av = a.lastSynced ?? Number.NEGATIVE_INFINITY;
+      const bv = b.lastSynced ?? Number.NEGATIVE_INFINITY;
+      cmp = av === bv ? 0 : av < bv ? -1 : 1;
+    } else {
+      const av = STATUS_RANK[a.lastStatus] ?? 99;
+      const bv = STATUS_RANK[b.lastStatus] ?? 99;
+      cmp = av === bv ? 0 : av < bv ? -1 : 1;
+    }
+    return cmp * sign;
+  });
+  return [...configured, ...unconfiguredRows];
+}
+
+/** 表头点击的三态切换：未排 → 升序 → 降序 → 恢复默认名称序 */
+export function toggleSort(current: SortSpec, key: "status" | "lastSynced"): SortSpec {
+  if (current.key !== key) return { key, dir: "asc" };
+  if (current.dir === "asc") return { key, dir: "desc" };
+  return { key: null, dir: "asc" };
+}
+
 export function SyncPage({ token }: { token: string }) {
   const { t } = useTranslation();
   const [repos, setRepos] = useState<Repo[]>([]);
@@ -65,6 +126,8 @@ export function SyncPage({ token }: { token: string }) {
     setStaleState(v);
     localStorage.setItem(STALE_RANGE_KEY, v);
   };
+  // 表格排序：默认按名称（后端返回顺序），点击状态/时间表头切换
+  const [sort, setSort] = useState<SortSpec>({ key: null, dir: "asc" });
   // 编辑弹窗：null 表示添加，Repo 表示编辑；null 外层表示关闭
   const [editor, setEditor] = useState<{ repo: Repo | null } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Repo | null>(null);
@@ -111,8 +174,11 @@ export function SyncPage({ token }: { token: string }) {
     };
   }, [load]);
 
-  // 范围过滤结果：表格展示与「开始同步」的 id 列表共用（范围模式两者一致）
-  const visibleRepos = useMemo(() => filterStale(repos, stale), [repos, stale]);
+  // 范围过滤结果再按表头选择排序：表格展示与「开始同步」的 id 列表共用
+  const visibleRepos = useMemo(
+    () => sortRepos(filterStale(repos, stale), sort),
+    [repos, stale, sort],
+  );
 
   const staleIds = useMemo(
     () =>
@@ -282,8 +348,34 @@ export function SyncPage({ token }: { token: string }) {
             <TableRow className="hover:bg-transparent">
               <TableHead className="sticky top-0 z-10 w-44 bg-card">{t("colRepo")}</TableHead>
               <TableHead className="sticky top-0 z-10 bg-card">{t("colAddress")}</TableHead>
-              <TableHead className="sticky top-0 z-10 w-24 bg-card">{t("colStatus")}</TableHead>
-              <TableHead className="sticky top-0 z-10 w-32 bg-card">{t("colLastSynced")}</TableHead>
+              <TableHead
+                className={sortHeaderClass("w-24", sort.key === "status")}
+                aria-sort={
+                  sort.key === "status" ? (sort.dir === "asc" ? "ascending" : "descending") : "none"
+                }
+                title={t("sortHint")}
+                onClick={() => setSort((s) => toggleSort(s, "status"))}
+              >
+                {t("colStatus")}
+                {sort.key === "status" && <span className="ml-1">{sort.dir === "asc" ? "↑" : "↓"}</span>}
+              </TableHead>
+              <TableHead
+                className={sortHeaderClass("w-32", sort.key === "lastSynced")}
+                aria-sort={
+                  sort.key === "lastSynced"
+                    ? sort.dir === "asc"
+                      ? "ascending"
+                      : "descending"
+                    : "none"
+                }
+                title={t("sortHint")}
+                onClick={() => setSort((s) => toggleSort(s, "lastSynced"))}
+              >
+                {t("colLastSynced")}
+                {sort.key === "lastSynced" && (
+                  <span className="ml-1">{sort.dir === "asc" ? "↑" : "↓"}</span>
+                )}
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>

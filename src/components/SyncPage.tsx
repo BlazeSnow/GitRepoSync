@@ -316,6 +316,11 @@ export function SyncPage({ token }: { token: string }) {
             setEditor(null);
             void load();
           }}
+          onDelete={(r) => {
+            // 弹窗内的删除入口：关闭编辑，转由既有确认弹窗执行删除
+            setEditor(null);
+            setDeleteTarget(r);
+          }}
         />
       )}
 

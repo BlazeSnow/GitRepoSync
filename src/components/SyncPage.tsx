@@ -202,14 +202,18 @@ export function SyncPage({ token }: { token: string }) {
   return (
     <div className="flex h-full flex-col p-6">
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <Button onClick={handleStartSync} disabled={staleIds.length === 0}>
-          <IconRefresh />
-          {stale === "all" ? t("startSync") : t("startSyncCount", { count: staleIds.length })}
-        </Button>
-        <Button variant="outline" onClick={handleStopSync} disabled={!running}>
-          <IconSquare className="h-3.5 w-3.5" />
-          {t("stopSync")}
-        </Button>
+        {/* 开始/停止按同步状态互斥切换：同一时刻只显示其中一个 */}
+        {running ? (
+          <Button variant="outline" onClick={handleStopSync}>
+            <IconSquare className="h-3.5 w-3.5" />
+            {t("stopSync")}
+          </Button>
+        ) : (
+          <Button onClick={handleStartSync} disabled={staleIds.length === 0}>
+            <IconRefresh />
+            {stale === "all" ? t("startSync") : t("startSyncCount", { count: staleIds.length })}
+          </Button>
+        )}
         <Select value={stale} onValueChange={setStale}>
           <SelectTrigger className="w-48">
             <SelectValue placeholder={t("staleAll")} />

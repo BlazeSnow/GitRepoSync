@@ -20,6 +20,7 @@
 - 每个网络 git 命令带超时（默认 1800s，LFS 3600s）与 HTTP 低速中断（停滞 120s 判死），超时或“停止同步”时强杀子进程
 - 多个仓库**串行**同步（内部队列依次执行），避免并发拉取抢占网络
 - 同步期间 `GIT_TERMINAL_PROMPT=0`，避免私有仓库卡在交互式输入
+- git 子进程 PATH 增强：图形界面（尤其 macOS 从 Finder/Dock 启动）继承的 PATH 极简，Homebrew 等用户级安装的 git-lfs 与凭据助手不在其中；启动时为所有 git 子进程补充常见安装目录（Homebrew / MacPorts / Linuxbrew，目录存在且未收录才追加，原 PATH 优先级不变），避免 LFS 误报未安装
 - 已知限制：GitLab 目标仓库走 SSH 且含 LFS 时，LFS 对象不会随推送上传（GitLab 不支持 SSH 的 git-lfs-transfer），请改用 HTTPS 目标地址
 
 ## 2. 数据库（SQLite）

@@ -1,5 +1,11 @@
 # Git Repo Sync 更新日志
 
+## 🏷️ v1.0.0-beta.3
+
+### 🛠️ 修复
+
+- 🍎 macOS 图形界面下 git-lfs 识别不到（始终提示「未检测到 git-lfs」）：Finder/Dock 启动的 GUI 应用继承的 PATH 极简（`/usr/bin:/bin:/usr/sbin:/sbin`），Homebrew 等用户级安装的 git-lfs（如 `/opt/homebrew/bin`）不在其中，`git lfs` 子命令因此找不到 git-lfs 可执行文件；现启动时为 git 子进程补充常见安装目录（Homebrew Apple Silicon / Intel、MacPorts、Linuxbrew，目录存在且未收录才追加），原 PATH 条目按原顺序保留在前、优先级不变——克隆/拉取/推送及凭据助手同样受益；终端（shell）启动路径不受影响
+
 ## 🏷️ v1.0.0-beta.2
 
 ### ✨ 新增

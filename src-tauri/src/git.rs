@@ -210,8 +210,9 @@ pub(crate) fn perform_git_sync(
     push_refs.push("+refs/tags/*:refs/tags/*".into());
 
     // 1 对多推送：对每个备份目标依次推送，状态按目标独立记录；
-    // 单个目标失败不阻断其余目标（最后汇总整体状态为 failed）
+    // 单个目标失败不阻断其余目标（最后汇总整体状态为 failed，失败原因并入消息供日志记录）
     let mut any_fail = false;
+    let mut target_errors: Vec<String> = Vec::new();
     for (remote, url) in targets {
         if lock(&state.stop_requested).contains(repo_id) {
             reset_running_targets(state, repo_id);
@@ -235,6 +236,11 @@ pub(crate) fn perform_git_sync(
                     return ("stopped".into(), tr(lang, "manually-stopped"));
                 }
                 any_fail = true;
+                target_errors.push(tr_a(
+                    lang,
+                    "push-target-failed",
+                    &[("remote", remote), ("err", &e)],
+                ));
                 target_status = ("failed".to_string(), Some(e));
             }
             Ok(_) => {
@@ -258,6 +264,9 @@ pub(crate) fn perform_git_sync(
 
     let mut parts = done;
     parts.extend(warnings);
+    if any_fail {
+        parts.extend(target_errors);
+    }
     let status = if any_fail { "failed" } else { "success" };
     (status.into(), parts.join(lang.sep()))
 }
@@ -651,9 +660,9 @@ mod tests {
         let (status, message) =
             perform_git_sync(&state, "r1", &repo, &targets, &base, crate::lang::Lang::Zh);
         assert_eq!(status, "failed", "任一目标失败整体为 failed: {message}");
-        // 整体消息是各步骤汇总（不含按目标错误，目标错误记录在 sync_targets 行），
-        // 断言推送步骤已完成
+        // 失败原因并入整体消息（按目标格式化），供表格悬停与操作日志记录
         assert!(message.contains("推送"), "消息应含推送步骤: {message}");
+        assert!(message.contains("bad"), "消息应含失败目标的按目标错误: {message}");
 
         let row = |remote: &str| {
             let conn = lock(&state.conn);

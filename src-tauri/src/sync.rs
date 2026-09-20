@@ -255,16 +255,32 @@ fn finish(
             );
         }
     }
-    let action = tr_a(
-        lang,
-        match status {
-            "success" => "log-sync-success",
-            "stopped" => "log-sync-stopped",
-            _ => "log-sync-failed",
+    let action = match status {
+        "success" => tr_a(lang, "log-sync-success", &[("name", repo_name)]),
+        "stopped" => tr_a(lang, "log-sync-stopped", &[("name", repo_name)]),
+        // 失败日志附带原因（git 错误或按目标推送错误），超长截断保持日志可读
+        _ => match message.as_deref() {
+            Some(reason) if !reason.is_empty() => tr_a(
+                lang,
+                "log-sync-failed-reason",
+                &[("name", repo_name), ("reason", &truncate_reason(reason))],
+            ),
+            _ => tr_a(lang, "log-sync-failed", &[("name", repo_name)]),
         },
-        &[("name", repo_name)],
-    );
+    };
     state.add_log(&action, operator);
+}
+
+/// 失败原因写入日志前折叠空白并按字符数截断（git 错误输出可能很长），保持日志单行可读
+fn truncate_reason(msg: &str) -> String {
+    const MAX_CHARS: usize = 300;
+    let flat = msg.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= MAX_CHARS {
+        return flat;
+    }
+    let mut s: String = flat.chars().take(MAX_CHARS).collect();
+    s.push('…');
+    s
 }
 
 fn run_sync(
@@ -468,6 +484,55 @@ mod tests {
         assert!(lock(&state.sync_queue).jobs.is_empty());
         drop(state);
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 失败日志附带原因：缺源地址的仓库走完整 run_sync 后，
+    /// 操作日志应记录包含可读原因（sync-no-source 文案）的失败条目
+    #[test]
+    fn failed_sync_logs_reason() {
+        use crate::lang::tr;
+        use crate::state::testutil::open_mock_app;
+
+        let (app, state, root) = open_mock_app("faillog");
+        {
+            let conn = lock(&state.conn);
+            conn.execute("INSERT INTO repos (id, name, source) VALUES ('r1', 'demo', '')", [])
+                .unwrap();
+        }
+        run_sync(state.as_ref(), &None, "r1", "test", crate::lang::Lang::Zh);
+
+        let reason = tr(crate::lang::Lang::Zh, "sync-no-source");
+        let actions: Vec<String> = {
+            let conn = lock(&state.conn);
+            let mut stmt = conn.prepare("SELECT action FROM operation_logs").unwrap();
+            stmt.query_map([], |r| r.get::<_, String>(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+        assert!(
+            actions
+                .iter()
+                .any(|a| a.contains("demo") && a.contains(&reason)),
+            "失败日志应包含原因（{reason}）: {actions:?}"
+        );
+
+        drop(app);
+        drop(state);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 截断函数：空白折叠为单空格，超长按字符截断并带省略号
+    #[test]
+    fn truncate_reason_collapses_and_caps() {
+        assert_eq!(truncate_reason("a\n\tb   c"), "a b c");
+        let long = "x".repeat(1000);
+        let t = truncate_reason(&long);
+        assert_eq!(t.chars().count(), 301);
+        assert!(t.ends_with('…'));
+        // 多字节字符按字符截断，不产生半截 UTF-8
+        let wide = "仓".repeat(500);
+        assert_eq!(truncate_reason(&wide).chars().count(), 301);
     }
 
     /// 命令层「停止同步」：重复入队不产生双任务；停止后 syncing 清空、

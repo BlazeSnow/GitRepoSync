@@ -1,8 +1,8 @@
 {
   "name": "git-repo-sync",
-  "version": "1.0.0-beta.2",
+  "version": "1.0.0-beta.3",
   "baseVersion": "v1.0.0",
-  "msiVersion": "1.0.2",
+  "msiVersion": "1.0.3",
   "description": "跨平台 Git 仓库同步桌面工具",
   "author": "BlazeSnow",
   "repository": {

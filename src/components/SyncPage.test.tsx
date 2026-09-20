@@ -20,7 +20,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import { api } from "@/lib/api";
-import { SyncPage, filterStale } from "./SyncPage";
+import { SyncPage, filterStale, sortRepos, toggleSort, type SortSpec } from "./SyncPage";
 
 // vitest 非 globals 模式下 testing-library 不自动卸载，需手动清理
 afterEach(cleanup);
@@ -251,6 +251,84 @@ it("切页（卸载）后重进保持同步范围选择，表格与计数随之�
   expect(screen.queryByText("fresh")).not.toBeInTheDocument();
   expect(screen.getByText("stale")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "开始同步（1 个）" })).toBeInTheDocument();
+});
+
+it("sortRepos：状态问题优先且未配置最后；时间从未同步最先；toggleSort 三态循环", () => {
+  const now = Date.now();
+  const day = 86_400_000;
+  const repos = [
+    repo({ id: "1", name: "a", lastStatus: "idle", lastSynced: now, targets: [backupTarget] }),
+    repo({ id: "2", name: "b", lastStatus: "failed", lastSynced: now - day, targets: [backupTarget] }),
+    repo({ id: "3", name: "c", lastStatus: "success", lastSynced: null, targets: [backupTarget] }),
+    repo({ id: "4", name: "d", lastStatus: "success", lastSynced: now, source: "", targets: [] }),
+  ];
+  const names = (rows: Repo[]) => rows.map((r) => r.name);
+
+  // 默认（null）保持名称序
+  const def: SortSpec = { key: null, dir: "asc" };
+  expect(names(sortRepos(repos, def))).toEqual(["a", "b", "c", "d"]);
+  // 状态升序：失败 > 未同步 > 成功，未配置最后；降序相反
+  expect(names(sortRepos(repos, { key: "status", dir: "asc" }))).toEqual(["b", "a", "c", "d"]);
+  expect(names(sortRepos(repos, { key: "status", dir: "desc" }))).toEqual(["c", "a", "b", "d"]);
+  // 时间升序：从未同步（null）最先，其后从旧到新；降序相反
+  expect(names(sortRepos(repos, { key: "lastSynced", dir: "asc" }))).toEqual(["c", "b", "a", "d"]);
+  expect(names(sortRepos(repos, { key: "lastSynced", dir: "desc" }))).toEqual(["a", "b", "c", "d"]);
+
+  // 三态循环：未排 → 升 → 降 → 恢复默认
+  expect(toggleSort(def, "status")).toEqual({ key: "status", dir: "asc" });
+  expect(toggleSort({ key: "status", dir: "asc" }, "status")).toEqual({ key: "status", dir: "desc" });
+  expect(toggleSort({ key: "status", dir: "desc" }, "status")).toEqual(def);
+  // 换列直接从升序开始
+  expect(toggleSort({ key: "status", dir: "desc" }, "lastSynced")).toEqual({
+    key: "lastSynced",
+    dir: "asc",
+  });
+});
+
+it("点击状态/时间表头切换排序：升 → 降 → 恢复默认名称序", async () => {
+  const now = Date.now();
+  const day = 86_400_000;
+  vi.mocked(api.discoverRepos).mockResolvedValue([
+    repo({ id: "1", name: "alpha", lastStatus: "idle", lastSynced: now, targets: [backupTarget] }),
+    repo({
+      id: "2",
+      name: "beta",
+      lastStatus: "failed",
+      lastMessage: "boom",
+      lastSynced: now - day,
+      targets: [backupTarget],
+    }),
+    repo({ id: "3", name: "gamma", lastStatus: "success", lastSynced: null, targets: [backupTarget] }),
+  ]);
+  vi.mocked(api.listRepos).mockResolvedValue([]);
+
+  render(<SyncPage token="tok" />);
+  await screen.findByText("alpha");
+  // 表体行首列为仓库名
+  const names = () =>
+    screen
+      .getAllByRole("row")
+      .slice(1)
+      .map((r) => r.querySelector("td")?.textContent);
+  expect(names()).toEqual(["alpha", "beta", "gamma"]);
+
+  // 状态表头：升序（失败在前）带 ↑，再点降序，三点恢复默认
+  const statusHeader = screen.getByRole("columnheader", { name: /状态/ });
+  fireEvent.click(statusHeader);
+  expect(names()).toEqual(["beta", "alpha", "gamma"]);
+  expect(screen.getByRole("columnheader", { name: /状态/ })).toHaveTextContent("↑");
+  fireEvent.click(screen.getByRole("columnheader", { name: /状态/ }));
+  expect(names()).toEqual(["gamma", "alpha", "beta"]);
+  expect(screen.getByRole("columnheader", { name: /状态/ })).toHaveTextContent("↓");
+  fireEvent.click(screen.getByRole("columnheader", { name: /状态/ }));
+  expect(names()).toEqual(["alpha", "beta", "gamma"]);
+  expect(screen.getByRole("columnheader", { name: /状态/ })).not.toHaveTextContent("↑");
+
+  // 时间表头：升序从未同步在前，降序最新在前
+  fireEvent.click(screen.getByRole("columnheader", { name: /上次同步/ }));
+  expect(names()).toEqual(["gamma", "beta", "alpha"]);
+  fireEvent.click(screen.getByRole("columnheader", { name: /上次同步/ }));
+  expect(names()).toEqual(["alpha", "beta", "gamma"]);
 });
 
 it("编辑弹窗内删除仓库：右键编辑 → 删除仓库 → 确认后调用 deleteRepo", async () => {

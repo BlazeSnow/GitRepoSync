@@ -173,6 +173,59 @@ it("点击「刷新仓库」重新扫描加载，MCP 新增的仓库可见", asy
   expect(api.discoverRepos).toHaveBeenCalledTimes(2);
 });
 
+it("右键表格行弹出菜单：立即同步、连续右键换行切换、点击外部关闭", async () => {
+  vi.mocked(api.discoverRepos).mockResolvedValue([
+    repo({ id: "a", name: "alpha", targets: [backupTarget] }),
+    repo({ id: "b", name: "beta", targets: [backupTarget] }),
+  ]);
+  vi.mocked(api.listRepos).mockResolvedValue([]);
+  vi.mocked(api.startSync).mockResolvedValue(1);
+
+  render(<SyncPage token="tok" />);
+  const alpha = await screen.findByText("alpha");
+
+  // 右键行 → 菜单出现（编辑 / 开始同步 / 删除）
+  fireEvent.contextMenu(alpha);
+  expect(screen.getByRole("button", { name: "编辑仓库" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "删除" })).toBeInTheDocument();
+
+  // 菜单中的「开始同步」（与工具栏按钮同名，取最后一个）针对该行发起同步
+  const syncButtons = screen.getAllByRole("button", { name: "开始同步" });
+  fireEvent.click(syncButtons[syncButtons.length - 1]);
+  await waitFor(() => expect(api.startSync).toHaveBeenCalledWith("tok", ["a"]));
+
+  // 菜单已随点击关闭
+  expect(screen.queryByRole("button", { name: "编辑仓库" })).not.toBeInTheDocument();
+
+  // 再次右键 alpha 打开菜单，随后直接右键 beta：菜单切换到 beta 而非消失
+  // （回归：openMenu 阻止冒泡，window 的关闭监听不得清空新菜单）
+  fireEvent.contextMenu(screen.getByText("alpha"));
+  expect(screen.getByRole("button", { name: "编辑仓库" })).toBeInTheDocument();
+  fireEvent.contextMenu(screen.getByText("beta"));
+  fireEvent.click(screen.getByRole("button", { name: "编辑仓库" }));
+  expect(await screen.findByLabelText("仓库名称")).toHaveValue("beta");
+  fireEvent.click(screen.getByRole("button", { name: "取消" }));
+
+  // 左键点击菜单外关闭
+  fireEvent.contextMenu(screen.getByText("alpha"));
+  expect(screen.getByRole("button", { name: "编辑仓库" })).toBeInTheDocument();
+  fireEvent.click(document.body);
+  expect(screen.queryByRole("button", { name: "编辑仓库" })).not.toBeInTheDocument();
+});
+
+it("表头/空白区右键仅阻止默认行为，不弹出菜单", async () => {
+  vi.mocked(api.discoverRepos).mockResolvedValue([repo({ targets: [backupTarget] })]);
+  vi.mocked(api.listRepos).mockResolvedValue([]);
+
+  const { container } = render(<SyncPage token="tok" />);
+  await screen.findByText("demo");
+
+  // 表头右键：容器 handler 阻止原生菜单，且无自定义菜单出现
+  fireEvent.contextMenu(screen.getByText("仓库"));
+  expect(screen.queryByRole("button", { name: "编辑仓库" })).not.toBeInTheDocument();
+  expect(container.querySelector(".bg-popover")).toBeNull();
+});
+
 it("编辑弹窗内删除仓库：右键编辑 → 删除仓库 → 确认后调用 deleteRepo", async () => {
   vi.mocked(api.discoverRepos).mockResolvedValue([repo({ targets: [backupTarget] })]);
   vi.mocked(api.listRepos).mockResolvedValue([]);

@@ -469,4 +469,104 @@ mod tests {
         drop(state);
         std::fs::remove_dir_all(&root).ok();
     }
+
+    /// 命令层「停止同步」：重复入队不产生双任务；停止后 syncing 清空、
+    /// git 子进程被终止、repos 状态为 stopped
+    #[test]
+    fn stop_sync_kills_running_process_and_clears_state() {
+        use crate::state::testutil::{insert_session, open_mock_app};
+        use std::io::Write;
+        use tauri::Manager;
+
+        let (app, state, root) = open_mock_app("stop");
+        let st = app.state::<Arc<AppState>>();
+        insert_session(state.as_ref(), "tok");
+
+        // 仓库源指向一个 git 子命令：读到 stdin 关闭才退出，保证子进程存活可被终止
+        let repo_dir = root.join("busy");
+        std::fs::create_dir_all(&repo_dir).unwrap();
+        {
+            let conn = lock(&state.conn);
+            conn.execute(
+                "INSERT INTO repos (id, name, source) VALUES ('r1', 'busy', ?1)",
+                params![repo_dir.to_string_lossy()],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO sync_targets (repo_id, remote, url) VALUES ('r1', 'backup', ?1)",
+                params![repo_dir.join("b.git").to_string_lossy()],
+            )
+            .unwrap();
+        }
+        // 源目录准备成 git 仓库并写入一个挂起的 hook：git 命令会卡在 hook 上
+        let git = |args: &[&str]| {
+            let s = std::process::Command::new("git")
+                .args(args)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .current_dir(&repo_dir)
+                .status()
+                .unwrap();
+            assert!(s.success(), "git {:?} 失败", args);
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["config", "user.name", "t"]);
+        git(&["config", "user.email", "t@t"]);
+        std::fs::write(repo_dir.join("a.txt"), "v").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "v"]);
+        let hooks = repo_dir.join(".git").join("hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        // pre-auto-gc hook：读 stdin 直到 EOF，模拟长时间挂起的 git 操作
+        #[cfg(windows)]
+        let hook_body = "@echo off\r\nmore\r\n";
+        #[cfg(not(windows))]
+        let hook_body = "#!/bin/sh\ncat\n";
+        std::fs::write(hooks.join("pre-auto-gc"), hook_body).unwrap();
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(hooks.join("pre-auto-gc"), std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
+
+        // 入队两次同一仓库：第二次因已在 syncing 被拒
+        let started = spawn_sync(state.clone(), None, "r1".into(), "test".into(), crate::lang::Lang::Zh);
+        assert!(started);
+        let dup = spawn_sync(state.clone(), None, "r1".into(), "test".into(), crate::lang::Lang::Zh);
+        assert!(!dup, "同步中的仓库不应重复入队");
+
+        // 等 worker 启动 git 子进程（轮询 sync_procs 出现）；并行测试下 CPU 紧张，
+        // 出现后再等一个轮询周期，确保 git 已进入被轮询等待的运行态
+        let mut waited = 0;
+        while lock(&state.sync_procs).is_empty() {
+            if waited > 200 {
+                panic!("同步子进程未启动");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            waited += 1;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(600));
+
+        stop_sync(st.clone(), "tok".into(), None).unwrap();
+        // 终止请求后 worker 收尾（杀进程 → 落库）：轮询至 syncing 清空再断言
+        let mut status = String::new();
+        for _ in 0..200 {
+            status = {
+                let conn = lock(&state.conn);
+                conn.query_row("SELECT last_status FROM repos WHERE id = 'r1'", [], |r| {
+                    r.get::<_, String>(0)
+                })
+                .unwrap_or_default()
+            };
+            if status == "stopped" && lock(&state.syncing).is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert_eq!(status, "stopped", "停止后仓库状态应为 stopped");
+        drop(st);
+        drop(app);
+        drop(state);
+        std::fs::remove_dir_all(&root).ok();
+    }
 }

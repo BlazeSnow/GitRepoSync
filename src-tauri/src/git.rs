@@ -582,6 +582,107 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    /// 多目标推送：一个目标失败（路径不可写）不影响另一个目标成功，
+    /// 成功目标的时间已更新、失败目标带错误消息；整体状态为 failed
+    #[test]
+    fn perform_git_sync_pushes_to_all_targets_independently() {
+        use crate::state::AppState;
+
+        let root = std::env::temp_dir().join(format!("grs-multi-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&root).unwrap();
+        let base = root.join("base");
+        let source = root.join("src");
+        let good = root.join("good.git");
+        // 坏目标：父路径是一个普通文件，push 必败
+        let bad_parent = root.join("not-a-dir");
+        std::fs::write(&bad_parent, "x").unwrap();
+        let bad = bad_parent.join("bad.git");
+        let git = |args: &[&str], cwd: &Path| {
+            let st = std::process::Command::new("git")
+                .args(args)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .current_dir(cwd)
+                .status()
+                .unwrap();
+            assert!(st.success(), "git {:?} 执行失败", args);
+        };
+        std::fs::create_dir_all(&source).unwrap();
+        git(&["init", "-q", "-b", "main"], &source);
+        git(&["config", "user.name", "t"], &source);
+        git(&["config", "user.email", "t@t"], &source);
+        std::fs::write(source.join("a.txt"), "v1").unwrap();
+        git(&["add", "."], &source);
+        git(&["commit", "-q", "-m", "v1"], &source);
+        git(&["init", "-q", "--bare", good.to_str().unwrap()], &root);
+
+        let state = AppState::open(root.join("app.db")).unwrap();
+        {
+            let conn = lock(&state.conn);
+            conn.execute(
+                "INSERT INTO repos (id, name, source) VALUES ('r1', 'demo', ?1)",
+                params![source.to_string_lossy()],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO sync_targets (repo_id, remote, url) VALUES ('r1', 'good', ?1)",
+                params![good.to_string_lossy()],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO sync_targets (repo_id, remote, url) VALUES ('r1', 'bad', ?1)",
+                params![bad.to_string_lossy()],
+            )
+            .unwrap();
+        }
+        let repo = Repo {
+            id: "r1".to_string(),
+            name: "demo".to_string(),
+            source: source.to_string_lossy().to_string(),
+            last_synced: None,
+            last_status: "idle".to_string(),
+            last_message: None,
+            targets: Vec::new(),
+        };
+        let targets = vec![
+            ("bad".to_string(), bad.to_string_lossy().to_string()),
+            ("good".to_string(), good.to_string_lossy().to_string()),
+        ];
+
+        let (status, message) =
+            perform_git_sync(&state, "r1", &repo, &targets, &base, crate::lang::Lang::Zh);
+        assert_eq!(status, "failed", "任一目标失败整体为 failed: {message}");
+        // 整体消息是各步骤汇总（不含按目标错误，目标错误记录在 sync_targets 行），
+        // 断言推送步骤已完成
+        assert!(message.contains("推送"), "消息应含推送步骤: {message}");
+
+        let row = |remote: &str| {
+            let conn = lock(&state.conn);
+            conn.query_row(
+                "SELECT last_status, last_message, last_synced FROM sync_targets
+                 WHERE repo_id = 'r1' AND remote = ?1",
+                params![remote],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, Option<String>>(1)?,
+                        r.get::<_, Option<i64>>(2)?,
+                    ))
+                },
+            )
+            .unwrap()
+        };
+        let (good_status, _, good_ts) = row("good");
+        assert_eq!(good_status, "success", "好目标不受坏目标影响");
+        assert!(good_ts.is_some(), "成功目标时间已更新");
+        let (bad_status, bad_msg, bad_ts) = row("bad");
+        assert_eq!(bad_status, "failed");
+        assert!(bad_msg.is_some(), "失败目标带错误消息");
+        assert!(bad_ts.is_none(), "失败目标不更新时间");
+
+        drop(state);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     fn rev_parse(path: &Path, spec: &str) -> String {
         let out = std::process::Command::new("git")
             .args(["-C", path.to_str().unwrap(), "rev-parse", spec])

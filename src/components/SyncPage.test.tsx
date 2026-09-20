@@ -345,6 +345,54 @@ it("点击状态/时间表头切换排序：升 → 降 → 恢复默认名称�
   expect(screen.getByRole("columnheader", { name: /仓库/ })).not.toHaveTextContent("↑");
 });
 
+it("行悬停提示为结构化摘要：整体状态时间 + 各目标详情，而非统一的步骤汇总", async () => {
+  const now = Date.now();
+  const generic = "拉取源仓库更新；更新 LFS 文件；更新 submodule；推送到目标仓库";
+  vi.mocked(api.discoverRepos).mockResolvedValue([
+    repo({
+      id: "1",
+      name: "ok",
+      lastStatus: "success",
+      lastSynced: now,
+      lastMessage: generic,
+      targets: [{ ...backupTarget, lastStatus: "success", lastSynced: now }],
+    }),
+    repo({
+      id: "2",
+      name: "bad",
+      lastStatus: "failed",
+      lastSynced: null,
+      lastMessage: "推送到 gitlab 失败：LFS objects are missing",
+      targets: [
+        {
+          ...backupTarget,
+          lastStatus: "failed",
+          lastMessage: "推送到 gitlab 失败：LFS objects are missing",
+          lastSynced: null,
+        },
+      ],
+    }),
+  ]);
+  vi.mocked(api.listRepos).mockResolvedValue([]);
+
+  render(<SyncPage token="tok" />);
+  await screen.findByText("ok");
+
+  // 成功行：整体成功 + 目标成功；统一的步骤汇总不再作为悬停提示
+  const okRow = screen.getByText("ok").closest("tr") as HTMLElement;
+  const okTitle = okRow.getAttribute("title") ?? "";
+  expect(okTitle).toContain("成功");
+  expect(okTitle).toContain("backup：成功");
+  expect(okTitle).not.toContain("拉取源仓库更新");
+
+  // 失败行：整体失败 + 目标失败与错误详情
+  const badRow = screen.getByText("bad").closest("tr") as HTMLElement;
+  const badTitle = badRow.getAttribute("title") ?? "";
+  expect(badTitle).toContain("失败");
+  expect(badTitle).toContain("backup：失败");
+  expect(badTitle).toContain("LFS objects are missing");
+});
+
 it("编辑弹窗内删除仓库：右键编辑 → 删除仓库 → 确认后调用 deleteRepo", async () => {
   vi.mocked(api.discoverRepos).mockResolvedValue([repo({ targets: [backupTarget] })]);
   vi.mocked(api.listRepos).mockResolvedValue([]);

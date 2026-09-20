@@ -264,9 +264,11 @@ it("sortRepos：状态问题优先且未配置最后；时间从未同步最先�
   ];
   const names = (rows: Repo[]) => rows.map((r) => r.name);
 
-  // 默认（null）保持名称序
+  // 默认（null）保持名称序；名称升序与默认一致，降序反转
   const def: SortSpec = { key: null, dir: "asc" };
   expect(names(sortRepos(repos, def))).toEqual(["a", "b", "c", "d"]);
+  expect(names(sortRepos(repos, { key: "name", dir: "asc" }))).toEqual(["a", "b", "c", "d"]);
+  expect(names(sortRepos(repos, { key: "name", dir: "desc" }))).toEqual(["c", "b", "a", "d"]);
   // 状态升序：失败 > 未同步 > 成功，未配置最后；降序相反
   expect(names(sortRepos(repos, { key: "status", dir: "asc" }))).toEqual(["b", "a", "c", "d"]);
   expect(names(sortRepos(repos, { key: "status", dir: "desc" }))).toEqual(["c", "a", "b", "d"]);
@@ -329,6 +331,18 @@ it("点击状态/时间表头切换排序：升 → 降 → 恢复默认名称�
   expect(names()).toEqual(["gamma", "beta", "alpha"]);
   fireEvent.click(screen.getByRole("columnheader", { name: /上次同步/ }));
   expect(names()).toEqual(["alpha", "beta", "gamma"]);
+
+  // 名称表头：升序与默认一致（带 ↑），降序反转，三点恢复默认（箭头消失）
+  const nameHeader = screen.getByRole("columnheader", { name: /仓库/ });
+  fireEvent.click(nameHeader);
+  expect(names()).toEqual(["alpha", "beta", "gamma"]);
+  expect(screen.getByRole("columnheader", { name: /仓库/ })).toHaveTextContent("↑");
+  fireEvent.click(screen.getByRole("columnheader", { name: /仓库/ }));
+  expect(names()).toEqual(["gamma", "beta", "alpha"]);
+  expect(screen.getByRole("columnheader", { name: /仓库/ })).toHaveTextContent("↓");
+  fireEvent.click(screen.getByRole("columnheader", { name: /仓库/ }));
+  expect(names()).toEqual(["alpha", "beta", "gamma"]);
+  expect(screen.getByRole("columnheader", { name: /仓库/ })).not.toHaveTextContent("↑");
 });
 
 it("编辑弹窗内删除仓库：右键编辑 → 删除仓库 → 确认后调用 deleteRepo", async () => {

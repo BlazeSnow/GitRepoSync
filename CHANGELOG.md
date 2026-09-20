@@ -1,5 +1,11 @@
 # Git Repo Sync 更新日志
 
+## 🏷️ v1.0.0-beta.4
+
+### 🛠️ 修复
+
+- 📦 LFS 仓库同步到 GitLab 失败（pre-receive 报 "LFS objects are missing"）：此前 LFS 对象仅靠 `git push` 内嵌的按需上传，对象只被 tag 或历史引用时可能覆盖不到，且上传与推送存在时序竞态，GitLab 检查时对象尚未就绪而拒绝整次推送。现改为三重修复——① 每个目标推送前先执行 `git lfs push --all` 预上传全部 LFS 对象（预上传失败不阻断推送，作为警告并入该目标消息）；② 推送被 "LFS objects are missing" 拒绝时等待 5 秒、重传 LFS 后自动重试一次（服务端索引滞后的竞态兜底）；③ 镜像仓库写入 `lfs.locksverify=false`（无人值守备份不应因文件被他人加锁而失败，同时消除按 ref 重复的 "Locking support detected" 警告）；另将 git 输出中的连续重复行折叠为单行，避免多 tag 推送的重复警告刷爆状态消息
+
 ## 🏷️ v1.0.0-beta.3
 
 ### ✨ 新增

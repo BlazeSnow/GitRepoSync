@@ -10,10 +10,10 @@
 
 1. **拉取**：fetch-only——中转目录（`{基地址}/{仓库名}`，如 `~/repo/my-repo`）不存在时先 `git clone <源>`；随后 `git fetch origin --prune --tags` 只更新 origin 跟踪引用，**不合并工作区**，不受本地脏状态或合并冲突影响（源地址变更自动 `remote set-url`）
 2. **更新中转站**：
-   - LFS：`git lfs fetch --all origin`（下载所有引用指向的 LFS 对象）；未安装 git-lfs 时跳过并注明
+   - LFS：`git lfs fetch --all origin`（下载所有引用指向的 LFS 对象）；未安装 git-lfs 时跳过并注明；同时在镜像仓库写入 `lfs.locksverify=false`（无人值守备份不因文件被加锁而失败，也消除按 ref 重复的 locking 警告）
    - submodule：`git submodule update --init --recursive`
    - 两步失败**降级为警告**：引用已备份、内容可能不完整，不阻断推送
-3. **推送**（1 对多）：对每个备份目标依次推送本地分支 + origin 跟踪分支（补全本地未 checkout 的分支）+ 标签，`--prune` 强制与来源对齐（删除来源已不存在的分支/标签）；单个目标失败不阻断其余目标，状态按目标独立记录
+3. **推送**（1 对多）：对每个备份目标**先 `git lfs push --all` 预上传全部 LFS 对象**（失败降级为该目标的警告，不阻断推送），再依次推送本地分支 + origin 跟踪分支（补全本地未 checkout 的分支）+ 标签，`--prune` 强制与来源对齐（删除来源已不存在的分支/标签）；单个目标失败不阻断其余目标，状态按目标独立记录；推送被 "LFS objects are missing" 拒绝时（GitLab 索引滞后竞态）等待 5 秒重传 LFS 并自动重试一次
 
 其他保障：
 
@@ -21,7 +21,7 @@
 - 多个仓库**串行**同步（内部队列依次执行），避免并发拉取抢占网络
 - 同步期间 `GIT_TERMINAL_PROMPT=0`，避免私有仓库卡在交互式输入
 - git 子进程 PATH 增强：图形界面（尤其 macOS 从 Finder/Dock 启动）继承的 PATH 极简，Homebrew 等用户级安装的 git-lfs 与凭据助手不在其中；启动时为所有 git 子进程补充常见安装目录（Homebrew / MacPorts / Linuxbrew，目录存在且未收录才追加，原 PATH 优先级不变），避免 LFS 误报未安装
-- 已知限制：GitLab 目标仓库走 SSH 且含 LFS 时，LFS 对象不会随推送上传（GitLab 不支持 SSH 的 git-lfs-transfer），请改用 HTTPS 目标地址
+- LFS 对象统一走 HTTPS LFS 协议上传：目标地址即使为 SSH，git-lfs 也会自动协商到对应 HTTPS LFS 端点（GitLab 支持该协商）；预上传认证失败会记录为该目标的警告（推送仍尝试），此时需配置凭据助手或改用 HTTPS 目标地址
 
 ## 2. 数据库（SQLite）
 

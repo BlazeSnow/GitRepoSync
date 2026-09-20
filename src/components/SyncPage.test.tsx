@@ -62,6 +62,8 @@ const backupTarget: Repo["targets"][number] = {
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  // 范围选择持久化到 localStorage：每个用例从干净状态开始
+  localStorage.clear();
   // 语言固定中文，断言界面文案
   const { default: i18next } = await import("i18next");
   await i18next.changeLanguage("zh");
@@ -224,6 +226,31 @@ it("表头/空白区右键仅阻止默认行为，不弹出菜单", async () => 
   fireEvent.contextMenu(screen.getByText("仓库"));
   expect(screen.queryByRole("button", { name: "编辑仓库" })).not.toBeInTheDocument();
   expect(container.querySelector(".bg-popover")).toBeNull();
+});
+
+it("切页（卸载）后重进保持同步范围选择，表格与计数随之恢复", async () => {
+  const now = Date.now();
+  const day = 86_400_000;
+  vi.mocked(api.discoverRepos).mockResolvedValue([
+    repo({ id: "fresh", name: "fresh", lastSynced: now, targets: [backupTarget] }),
+    repo({ id: "stale", name: "stale", lastSynced: now - 2 * day, targets: [backupTarget] }),
+  ]);
+  vi.mocked(api.listRepos).mockResolvedValue([]);
+
+  // 第一次进入：选择「1 天内未同步」（选择写入 localStorage）
+  const first = render(<SyncPage token="tok" />);
+  fireEvent.click(await screen.findByRole("combobox"));
+  fireEvent.click(await screen.findByRole("option", { name: "1 天内未同步" }));
+  await waitFor(() => expect(screen.queryByText("fresh")).not.toBeInTheDocument());
+  first.unmount();
+
+  // 第二次进入（模拟从日志页切回）：范围不重置为全部
+  render(<SyncPage token="tok" />);
+  await screen.findByRole("combobox");
+  expect(screen.getByRole("combobox")).toHaveTextContent("1 天内未同步");
+  expect(screen.queryByText("fresh")).not.toBeInTheDocument();
+  expect(screen.getByText("stale")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "开始同步（1 个）" })).toBeInTheDocument();
 });
 
 it("编辑弹窗内删除仓库：右键编辑 → 删除仓库 → 确认后调用 deleteRepo", async () => {

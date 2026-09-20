@@ -110,7 +110,7 @@
 ## 8. 多语言（中文 / English）
 
 - 后端采用 [fluent-i18n](https://crates.io/crates/fluent-i18n)，全部文案集中在 `src-tauri/locales/zh-CN/main.ftl`（默认与回落语言）与 `en-US/main.ftl`，编译期内嵌
-- 前端采用 [react-i18next](https://react.i18next.dev/)（词典内嵌 `src/i18n.ts`），设置页提供语言卡片切换语言，选择存入 localStorage，首次启动按浏览器语言自动选择
+- 前端采用 [react-i18next](https://react.i18next.dev/)（词典拆分 `src/i18n/zh.ts` 与 `en.ts`，新增键需两文件同步），设置页提供语言卡片切换语言，选择存入 localStorage，首次启动按浏览器语言自动选择
 - 语言选择规则：
   - GUI：前端切换语言时通过 `set_lang` 命令同步到后端，之后的错误提示、日志、同步结果按该语言记录
   - MCP：按 initialize 请求的 `locale` 字段返回工具描述与运行时消息；环境变量 `GIT_REPO_SYNC_LANG`（`zh` / `en`）可强制指定
@@ -123,3 +123,10 @@
 - 默认跟随系统深浅色（`prefers-color-scheme`），系统切换时即时生效；设置页「外观」卡片可手动指定：跟随系统 / 浅色 / 深色，选择存入 localStorage（`grs_theme`）
 - 实现：Tailwind v4 按类名切换深色（`@custom-variant dark`，`<html class="dark">`）；深色调色板集中在 `src/index.css` 的 `.dark` 变量块，组件全部使用语义色（`bg-background` / `text-foreground` 等），整体换肤无需逐组件适配；`color-scheme` 随主题同步切换，滚动条与原生控件跟随
 - 首帧防闪烁：`index.html` 内联脚本在渲染前读取偏好并应用 `.dark` 类，避免深色系统下启动白屏；`src/lib/theme.ts` 负责偏好读写、主题应用与系统主题变化监听
+
+## 10. 测试
+
+- 运行：`pnpm test`（前端 vitest + jsdom + @testing-library/react）、`cd src-tauri && cargo test`（后端）
+- 后端（34 个）：Tauri 命令层借助 `tauri::test` 的 mock 运行时直接测试（`state.rs` 的 `testutil::open_mock_app` 提供独立临时数据库的 mock 应用）——登录/登出/改密全流程（auth）、仓库 CRUD 含目标清洗/重名/软删除幂等（repos）、基地址与 APIKEY 与日志（settings）、多目标推送独立失败语义（git）、停止同步终止 git 子进程（sync）；另有流水线端到端（真实 git 子进程，本地 bare 仓库）、路径归一化、自动发现、MCP 协议层与工具语义、旧库迁移等
+- 前端（32 个）：外观主题、多语言时间格式化、类名工具、i18n 词典键两语言一致；组件渲染与交互——登录页、同步仓库页（范围筛选、按钮互斥、刷新仓库、Radix Select 交互）、日志页、MCP 页、设置页、仓库编辑弹窗、侧边栏布局
+- 测试约定：前端组件测试统一在 beforeEach 中先 `import("@/i18n")` 触发 i18next 实例初始化再 `changeLanguage("zh")`；涉及 Radix Select 的用例需为 jsdom 打桩 `scrollIntoView` / pointer capture / `ResizeObserver`，选中选项走 `fireEvent.click`（pointerup 合成事件在 jsdom 不生效）；后端命令层测试各自使用独立临时目录数据库，结束时清理

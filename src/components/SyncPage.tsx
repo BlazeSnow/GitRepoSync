@@ -31,6 +31,21 @@ const STALE_DAYS = [1, 3, 7, 30];
 /** 只有 origin（没有任何备份目标）或连源地址都没有的仓库视为未配置，不参与同步 */
 const isUnconfigured = (r: Repo) => !r.source || r.targets.length === 0;
 
+/**
+ * 同步范围过滤（与后端 select_stale_ids 语义一致）：all 显示全部；
+ * N 天范围内仅保留已配置且「从未同步或上次同步早于 N 天前」的仓库。
+ * 表格与「开始同步」按钮的计数共用同一份过滤结果，保证所见即可同步
+ */
+export function filterStale(repos: Repo[], stale: string): Repo[] {
+  if (stale === "all") return repos;
+  const days = Number(stale);
+  if (!Number.isFinite(days) || days <= 0) return repos;
+  const cutoff = Date.now() - days * 86400_000;
+  return repos.filter(
+    (r) => !isUnconfigured(r) && (r.lastSynced === null || r.lastSynced < cutoff),
+  );
+}
+
 export function SyncPage({ token }: { token: string }) {
   const { t } = useTranslation();
   const [repos, setRepos] = useState<Repo[]>([]);
@@ -80,12 +95,16 @@ export function SyncPage({ token }: { token: string }) {
     };
   }, [load]);
 
-  const staleIds = useMemo(() => {
-    const days = stale === "all" ? 0 : Number(stale);
-    const inRange = (r: Repo) =>
-      days === 0 || r.lastSynced === null || r.lastSynced < Date.now() - days * 86400_000;
-    return repos.filter((r) => !isUnconfigured(r) && inRange(r)).map((r) => r.id);
-  }, [repos, stale]);
+  // 范围过滤结果：表格展示与「开始同步」的 id 列表共用（范围模式两者一致）
+  const visibleRepos = useMemo(() => filterStale(repos, stale), [repos, stale]);
+
+  const staleIds = useMemo(
+    () =>
+      visibleRepos
+        .filter((r) => stale !== "all" || !isUnconfigured(r))
+        .map((r) => r.id),
+    [visibleRepos, stale],
+  );
 
   async function handleStartSync() {
     setError("");
@@ -224,14 +243,14 @@ export function SyncPage({ token }: { token: string }) {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {repos.length === 0 ? (
+            {visibleRepos.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={5} className="h-32 text-center text-muted-foreground">
-                  {t("syncEmpty")}
+                  {stale === "all" ? t("syncEmpty") : t("staleEmpty")}
                 </TableCell>
               </TableRow>
             ) : (
-              repos.map((repo) => {
+              visibleRepos.map((repo) => {
                 const badge = statusBadge[repo.lastStatus] ?? statusBadge.idle;
                 return (
                   <TableRow

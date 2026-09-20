@@ -25,6 +25,7 @@ export const en = {
   staleAll: "All repositories",
   staleDays_other: "Not synced in {{count}} days",
   staleDays_one: "Not synced in {{count}} day",
+  staleEmpty: "No repositories to sync in this range",
   addRepo: "Add repository",
   colRepo: "Repository",
   colAddress: "Addresses",

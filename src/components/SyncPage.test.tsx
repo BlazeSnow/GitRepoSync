@@ -120,7 +120,7 @@ it("全部配置齐全时「开始同步」可用，点击后按范围发起同�
   expect(api.startSync).toHaveBeenCalledWith("tok", ["id-1"]);
 });
 
-it("配置仓库从未同步且「停止同步」在无运行任务时禁用", async () => {
+it("无同步运行时仅显示「开始同步」，停止按钮不出现", async () => {
   vi.mocked(api.discoverRepos).mockResolvedValue([
     repo({
       targets: [
@@ -138,7 +138,23 @@ it("配置仓库从未同步且「停止同步」在无运行任务时禁用", a
 
   render(<SyncPage token="tok" />);
   expect(await screen.findByText("从未")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "停止同步" })).toBeDisabled();
+  expect(screen.queryByRole("button", { name: "开始同步" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "停止同步" })).not.toBeInTheDocument();
+});
+
+it("有仓库同步中时仅显示「停止同步」，点击终止全部同步", async () => {
+  vi.mocked(api.discoverRepos).mockResolvedValue([
+    repo({ id: "r1", name: "busy", lastStatus: "running", targets: [backupTarget] }),
+  ]);
+  vi.mocked(api.listRepos).mockResolvedValue([]);
+  vi.mocked(api.stopSync).mockResolvedValue(undefined);
+
+  render(<SyncPage token="tok" />);
+  expect(await screen.findByRole("button", { name: "停止同步" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /开始同步/ })).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "停止同步" }));
+  await waitFor(() => expect(api.stopSync).toHaveBeenCalledWith("tok", null));
 });
 
 it("filterStale：all 显示全部；N 天范围仅保留已配置且超期或从未同步的仓库", () => {

@@ -277,6 +277,21 @@ export function SyncPage({ token }: { token: string }) {
 
   const running = repos.some((r) => r.lastStatus === "running");
 
+  // 行悬停提示：整体状态与时间 + 各备份目标的状态与失败/警告详情。
+  // 不再使用 repo.lastMessage——成功时它是流水线步骤的固定汇总，每个仓库都一样
+  const rowTitle = (r: Repo): string => {
+    const statusText = (s: SyncStatus) => statusBadge[s]?.label ?? statusBadge.idle.label;
+    const clamp = (s: string, n = 200) => (s.length > n ? `${s.slice(0, n)}…` : s);
+    const lines = [
+      `${t("colStatus")}：${statusText(r.lastStatus)} · ${t("colLastSynced")}：${relativeTime(r.lastSynced)}`,
+      ...r.targets.map((tg) => {
+        const base = `${tg.remote}：${statusText(tg.lastStatus)}`;
+        return tg.lastMessage ? `${base} · ${clamp(tg.lastMessage)}` : base;
+      }),
+    ];
+    return lines.join("\n");
+  };
+
   // 地址列：origin 与全部备份目标压缩在一个单元格内，每行「远端名: 地址」
   const remoteCell = (repo: Repo) => {
     const lines: { remote: string; url: string; tip?: string }[] = [
@@ -409,7 +424,7 @@ export function SyncPage({ token }: { token: string }) {
                     className="cursor-default select-none"
                     onDoubleClick={() => setEditor({ repo })}
                     onContextMenu={(e) => openMenu(e, repo)}
-                    title={repo.lastMessage ?? undefined}
+                    title={rowTitle(repo)}
                   >
                     <TableCell className="font-medium">{repo.name}</TableCell>
                     <TableCell>{remoteCell(repo)}</TableCell>

@@ -157,6 +157,22 @@ it("有仓库同步中时仅显示「停止同步」，点击终止全部同步"
   await waitFor(() => expect(api.stopSync).toHaveBeenCalledWith("tok", null));
 });
 
+it("点击「刷新仓库」重新扫描加载，MCP 新增的仓库可见", async () => {
+  vi.mocked(api.discoverRepos)
+    .mockResolvedValueOnce([])
+    .mockResolvedValueOnce([repo({ id: "mcp", name: "mcp-added", targets: [backupTarget] })]);
+  vi.mocked(api.listRepos).mockResolvedValue([]);
+
+  render(<SyncPage token="tok" />);
+  await screen.findByRole("combobox");
+  expect(screen.queryByText("mcp-added")).not.toBeInTheDocument();
+  expect(api.discoverRepos).toHaveBeenCalledTimes(1);
+
+  fireEvent.click(screen.getByRole("button", { name: "刷新仓库" }));
+  expect(await screen.findByText("mcp-added")).toBeInTheDocument();
+  expect(api.discoverRepos).toHaveBeenCalledTimes(2);
+});
+
 it("filterStale：all 显示全部；N 天范围仅保留已配置且超期或从未同步的仓库", () => {
   const now = Date.now();
   const day = 86_400_000;

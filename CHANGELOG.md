@@ -4,6 +4,7 @@
 
 ### 🛠️ 修复
 
+- 🖥️ 同步仓库页表格不跟随范围筛选：范围下拉选择「N 天内未同步」时表格仍显示全部仓库，与「开始同步」按钮的范围不一致；现表格展示与按钮计数共用同一份范围过滤（与后端同步范围语义一致：仅保留已配置且超期或从未同步的仓库），范围内无仓库时显示专属空态提示
 - 🍎 macOS 图形界面下 git-lfs 识别不到（始终提示「未检测到 git-lfs」）：Finder/Dock 启动的 GUI 应用继承的 PATH 极简（`/usr/bin:/bin:/usr/sbin:/sbin`），Homebrew 等用户级安装的 git-lfs（如 `/opt/homebrew/bin`）不在其中，`git lfs` 子命令因此找不到 git-lfs 可执行文件；现启动时为 git 子进程补充常见安装目录（Homebrew Apple Silicon / Intel、MacPorts、Linuxbrew，目录存在且未收录才追加），原 PATH 条目按原顺序保留在前、优先级不变——克隆/拉取/推送及凭据助手同样受益；终端（shell）启动路径不受影响
 
 ## 🏷️ v1.0.0-beta.2

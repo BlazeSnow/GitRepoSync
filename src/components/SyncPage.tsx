@@ -28,6 +28,16 @@ import { IconPlus, IconRefresh, IconSquare } from "@/components/icons";
 
 const STALE_DAYS = [1, 3, 7, 30];
 
+/** 同步范围的 localStorage 键：切页（组件卸载）后保持上次选择 */
+const STALE_RANGE_KEY = "grs_stale_range";
+
+/** 读取持久化的同步范围，非法值回落 all */
+function loadStaleRange(): string {
+  const v = localStorage.getItem(STALE_RANGE_KEY);
+  if (v === null) return "all";
+  return v === "all" || STALE_DAYS.map(String).includes(v) ? v : "all";
+}
+
 /** 只有 origin（没有任何备份目标）或连源地址都没有的仓库视为未配置，不参与同步 */
 const isUnconfigured = (r: Repo) => !r.source || r.targets.length === 0;
 
@@ -49,7 +59,12 @@ export function filterStale(repos: Repo[], stale: string): Repo[] {
 export function SyncPage({ token }: { token: string }) {
   const { t } = useTranslation();
   const [repos, setRepos] = useState<Repo[]>([]);
-  const [stale, setStale] = useState("all");
+  const [stale, setStaleState] = useState(loadStaleRange);
+  // 范围选择写入 localStorage：切到日志等页面再回来时保持，不重置为全部
+  const setStale = (v: string) => {
+    setStaleState(v);
+    localStorage.setItem(STALE_RANGE_KEY, v);
+  };
   // 编辑弹窗：null 表示添加，Repo 表示编辑；null 外层表示关闭
   const [editor, setEditor] = useState<{ repo: Repo | null } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Repo | null>(null);

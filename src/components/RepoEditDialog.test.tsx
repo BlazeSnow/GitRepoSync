@@ -130,3 +130,37 @@ it("保存失败显示后端错误，取消按钮关闭弹窗", async () => {
   fireEvent.click(screen.getByRole("button", { name: "取消" }));
   expect(onClose).toHaveBeenCalled();
 });
+
+it("编辑模式显示「删除仓库」并回调 onDelete；添加模式不显示", () => {
+  const onDelete = vi.fn();
+
+  const { unmount } = render(
+    <RepoEditDialog
+      token="tok"
+      repo={repo({})}
+      onClose={vi.fn()}
+      onSaved={vi.fn()}
+      onDelete={onDelete}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "删除仓库" }));
+  expect(onDelete).toHaveBeenCalledWith(expect.objectContaining({ id: "id-1" }));
+  unmount();
+
+  // 添加模式（repo 为 null）没有删除按钮
+  render(
+    <RepoEditDialog
+      token="tok"
+      repo={null}
+      onClose={vi.fn()}
+      onSaved={vi.fn()}
+      onDelete={onDelete}
+    />,
+  );
+  expect(screen.queryByRole("button", { name: "删除仓库" })).not.toBeInTheDocument();
+
+  // 未传 onDelete 时不显示（向后兼容）
+  cleanup();
+  render(<RepoEditDialog token="tok" repo={repo({})} onClose={vi.fn()} onSaved={vi.fn()} />);
+  expect(screen.queryByRole("button", { name: "删除仓库" })).not.toBeInTheDocument();
+});

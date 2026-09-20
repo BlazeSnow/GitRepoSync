@@ -173,6 +173,25 @@ it("点击「刷新仓库」重新扫描加载，MCP 新增的仓库可见", asy
   expect(api.discoverRepos).toHaveBeenCalledTimes(2);
 });
 
+it("编辑弹窗内删除仓库：右键编辑 → 删除仓库 → 确认后调用 deleteRepo", async () => {
+  vi.mocked(api.discoverRepos).mockResolvedValue([repo({ targets: [backupTarget] })]);
+  vi.mocked(api.listRepos).mockResolvedValue([]);
+  vi.mocked(api.deleteRepo).mockResolvedValue(undefined);
+
+  render(<SyncPage token="tok" />);
+
+  // 右键行打开菜单，进入编辑弹窗
+  fireEvent.contextMenu(await screen.findByText("demo"));
+  fireEvent.click(screen.getByRole("button", { name: "编辑仓库" }));
+
+  // 弹窗内删除 → 确认弹窗 → 确认
+  fireEvent.click(await screen.findByRole("button", { name: "删除仓库" }));
+  expect(await screen.findByText(/确定要删除仓库/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "删除" }));
+
+  await waitFor(() => expect(api.deleteRepo).toHaveBeenCalledWith("tok", "id-1"));
+});
+
 it("filterStale：all 显示全部；N 天范围仅保留已配置且超期或从未同步的仓库", () => {
   const now = Date.now();
   const day = 86_400_000;
@@ -201,13 +220,9 @@ it("范围下拉选择 N 天后，表格仅显示符合范围的仓库且按钮�
   expect(await screen.findByText("fresh")).toBeInTheDocument();
   expect(screen.getByText("stale")).toBeInTheDocument();
 
-  // Radix Select：pointerDown（左键 + mouse）打开下拉
-  fireEvent.pointerDown(screen.getByRole("combobox"), {
-    button: 0,
-    ctrlKey: false,
-    pointerType: "mouse",
-  });
-  // 选项选中：jsdom 下 Radix 的 onClick 路径（指针类型非 mouse）直接触发选中
+  // jsdom 下 Radix trigger 的指针类型初始为 touch：click 即打开下拉（确定性路径）
+  fireEvent.click(screen.getByRole("combobox"));
+  // 选项选中：Radix 的 onClick 路径（指针类型非 mouse）直接触发选中
   const option = await screen.findByRole("option", { name: "1 天内未同步" });
   fireEvent.click(option);
 

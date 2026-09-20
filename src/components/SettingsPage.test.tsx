@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -54,6 +54,31 @@ it("渲染设置各分区：外观、语言、基地址、账户、软件信息"
   expect(screen.getByText("仓库基地址")).toBeInTheDocument();
   expect(screen.getByText("账户")).toBeInTheDocument();
   expect(screen.getByText("软件信息")).toBeInTheDocument();
+});
+
+it("修改密码表单具备密码管理器语义：form 提交与 autocomplete 标注", async () => {
+  render(<SettingsPage token="tok" username="admin" />);
+
+  // readonly 用户名字段关联凭据，新旧密码用 current/new-password 区分
+  const userInput = screen.getByLabelText("用户名") as HTMLInputElement;
+  expect(userInput).toHaveAttribute("autocomplete", "username");
+  expect(userInput).toHaveValue("admin");
+  expect(userInput).toHaveAttribute("readonly");
+  expect(screen.getByLabelText("旧密码")).toHaveAttribute("autocomplete", "current-password");
+  expect(screen.getByLabelText("新密码")).toHaveAttribute("autocomplete", "new-password");
+  expect(screen.getByLabelText("确认新密码")).toHaveAttribute("autocomplete", "new-password");
+
+  // form 提交：回车或点击提交按钮触发 changePassword
+  fireEvent.change(screen.getByLabelText("旧密码"), { target: { value: "admin123" } });
+  fireEvent.change(screen.getByLabelText("新密码"), { target: { value: "newpass1" } });
+  fireEvent.change(screen.getByLabelText("确认新密码"), { target: { value: "newpass1" } });
+  const form = userInput.closest("form");
+  expect(form).not.toBeNull();
+  fireEvent.submit(form as HTMLFormElement);
+  const { api } = await import("@/lib/api");
+  await waitFor(() =>
+    expect(api.changePassword).toHaveBeenCalledWith("tok", "admin123", "newpass1"),
+  );
 });
 
 it("主题卡片：点击深色立即应用 .dark 并持久化，点击浅色恢复", async () => {

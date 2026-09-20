@@ -25,8 +25,28 @@ import { ContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { RepoEditDialog } from "@/components/RepoEditDialog";
 import { DeleteRepoDialog } from "@/components/DeleteRepoDialog";
 import { IconPlus, IconRefresh, IconSquare } from "@/components/icons";
+import { cn } from "@/lib/utils";
 
 const STALE_DAYS = [1, 3, 7, 30];
+
+/** 可排序表头样式：保留吸顶、列宽与背景，加指针提示；激活排序时前景高亮 */
+function sortHeaderClass(width: string, active: boolean): string {
+  return cn(
+    "sticky top-0 z-10 bg-card cursor-pointer select-none",
+    width,
+    active && "text-foreground",
+  );
+}
+
+/** 同步范围的 localStorage 键：切页（组件卸载）后保持上次选择 */
+const STALE_RANGE_KEY = "grs_stale_range";
+
+/** 读取持久化的同步范围，非法值回落 all */
+function loadStaleRange(): string {
+  const v = localStorage.getItem(STALE_RANGE_KEY);
+  if (v === null) return "all";
+  return v === "all" || STALE_DAYS.map(String).includes(v) ? v : "all";
+}
 
 /** 只有 origin（没有任何备份目标）或连源地址都没有的仓库视为未配置，不参与同步 */
 const isUnconfigured = (r: Repo) => !r.source || r.targets.length === 0;
@@ -46,10 +66,73 @@ export function filterStale(repos: Repo[], stale: string): Repo[] {
   );
 }
 
+/** 可排序的列；表格排序状态 key 为 null 表示默认（后端返回的名称升序） */
+export type SortKey = "name" | "status" | "lastSynced";
+export interface SortSpec {
+  key: SortKey | null;
+  dir: "asc" | "desc";
+}
+
+/** 状态排序权重（升序 = 问题优先）：失败 > 同步中 > 已停止 > 未同步 > 成功 */
+const STATUS_RANK: Record<string, number> = {
+  failed: 0,
+  running: 1,
+  stopped: 2,
+  idle: 3,
+  success: 4,
+};
+
+/**
+ * 表格排序（纯前端，作用于范围过滤后的可见行）：
+ * - 名称：与后端默认一致的字符串序（升序与默认相同），降序反转；
+ * - 状态：升序按问题优先（失败 > 同步中 > 已停止 > 未同步 > 成功），降序反转；
+ * - 上次同步：升序「从未同步」最先、其后按时间从旧到新，降序相反；
+ * - 未配置仓库不参与方向反转，固定排在最后；
+ * - 同分时保持后端的名称顺序（Array.prototype.sort 稳定）
+ */
+export function sortRepos(repos: Repo[], sort: SortSpec): Repo[] {
+  if (sort.key === null) return repos;
+  const sign = sort.dir === "asc" ? 1 : -1;
+  const configured: Repo[] = [];
+  const unconfiguredRows: Repo[] = [];
+  for (const r of repos) (isUnconfigured(r) ? unconfiguredRows : configured).push(r);
+  configured.sort((a, b) => {
+    let cmp: number;
+    if (sort.key === "name") {
+      // 与 SQLite ORDER BY name（UTF-8 字节序）保持一致的字符串比较
+      cmp = a.name === b.name ? 0 : a.name < b.name ? -1 : 1;
+    } else if (sort.key === "lastSynced") {
+      const av = a.lastSynced ?? Number.NEGATIVE_INFINITY;
+      const bv = b.lastSynced ?? Number.NEGATIVE_INFINITY;
+      cmp = av === bv ? 0 : av < bv ? -1 : 1;
+    } else {
+      const av = STATUS_RANK[a.lastStatus] ?? 99;
+      const bv = STATUS_RANK[b.lastStatus] ?? 99;
+      cmp = av === bv ? 0 : av < bv ? -1 : 1;
+    }
+    return cmp * sign;
+  });
+  return [...configured, ...unconfiguredRows];
+}
+
+/** 表头点击的三态切换：未排 → 升序 → 降序 → 恢复默认名称序 */
+export function toggleSort(current: SortSpec, key: SortKey): SortSpec {
+  if (current.key !== key) return { key, dir: "asc" };
+  if (current.dir === "asc") return { key, dir: "desc" };
+  return { key: null, dir: "asc" };
+}
+
 export function SyncPage({ token }: { token: string }) {
   const { t } = useTranslation();
   const [repos, setRepos] = useState<Repo[]>([]);
-  const [stale, setStale] = useState("all");
+  const [stale, setStaleState] = useState(loadStaleRange);
+  // 范围选择写入 localStorage：切到日志等页面再回来时保持，不重置为全部
+  const setStale = (v: string) => {
+    setStaleState(v);
+    localStorage.setItem(STALE_RANGE_KEY, v);
+  };
+  // 表格排序：默认按名称（后端返回顺序），点击状态/时间表头切换
+  const [sort, setSort] = useState<SortSpec>({ key: null, dir: "asc" });
   // 编辑弹窗：null 表示添加，Repo 表示编辑；null 外层表示关闭
   const [editor, setEditor] = useState<{ repo: Repo | null } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Repo | null>(null);
@@ -96,8 +179,11 @@ export function SyncPage({ token }: { token: string }) {
     };
   }, [load]);
 
-  // 范围过滤结果：表格展示与「开始同步」的 id 列表共用（范围模式两者一致）
-  const visibleRepos = useMemo(() => filterStale(repos, stale), [repos, stale]);
+  // 范围过滤结果再按表头选择排序：表格展示与「开始同步」的 id 列表共用
+  const visibleRepos = useMemo(
+    () => sortRepos(filterStale(repos, stale), sort),
+    [repos, stale, sort],
+  );
 
   const staleIds = useMemo(
     () =>
@@ -191,6 +277,21 @@ export function SyncPage({ token }: { token: string }) {
 
   const running = repos.some((r) => r.lastStatus === "running");
 
+  // 行悬停提示：整体状态与时间 + 各备份目标的状态与失败/警告详情。
+  // 不再使用 repo.lastMessage——成功时它是流水线步骤的固定汇总，每个仓库都一样
+  const rowTitle = (r: Repo): string => {
+    const statusText = (s: SyncStatus) => statusBadge[s]?.label ?? statusBadge.idle.label;
+    const clamp = (s: string, n = 200) => (s.length > n ? `${s.slice(0, n)}…` : s);
+    const lines = [
+      `${t("colStatus")}：${statusText(r.lastStatus)} · ${t("colLastSynced")}：${relativeTime(r.lastSynced)}`,
+      ...r.targets.map((tg) => {
+        const base = `${tg.remote}：${statusText(tg.lastStatus)}`;
+        return tg.lastMessage ? `${base} · ${clamp(tg.lastMessage)}` : base;
+      }),
+    ];
+    return lines.join("\n");
+  };
+
   // 地址列：origin 与全部备份目标压缩在一个单元格内，每行「远端名: 地址」
   const remoteCell = (repo: Repo) => {
     const lines: { remote: string; url: string; tip?: string }[] = [
@@ -265,10 +366,46 @@ export function SyncPage({ token }: { token: string }) {
         <Table className="border-separate border-spacing-0">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead className="sticky top-0 z-10 w-44 bg-card">{t("colRepo")}</TableHead>
+              <TableHead
+                className={sortHeaderClass("w-44", sort.key === "name")}
+                aria-sort={
+                  sort.key === "name" ? (sort.dir === "asc" ? "ascending" : "descending") : "none"
+                }
+                title={t("sortHint")}
+                onClick={() => setSort((s) => toggleSort(s, "name"))}
+              >
+                {t("colRepo")}
+                {sort.key === "name" && <span className="ml-1">{sort.dir === "asc" ? "↑" : "↓"}</span>}
+              </TableHead>
               <TableHead className="sticky top-0 z-10 bg-card">{t("colAddress")}</TableHead>
-              <TableHead className="sticky top-0 z-10 w-24 bg-card">{t("colStatus")}</TableHead>
-              <TableHead className="sticky top-0 z-10 w-32 bg-card">{t("colLastSynced")}</TableHead>
+              <TableHead
+                className={sortHeaderClass("w-24", sort.key === "status")}
+                aria-sort={
+                  sort.key === "status" ? (sort.dir === "asc" ? "ascending" : "descending") : "none"
+                }
+                title={t("sortHint")}
+                onClick={() => setSort((s) => toggleSort(s, "status"))}
+              >
+                {t("colStatus")}
+                {sort.key === "status" && <span className="ml-1">{sort.dir === "asc" ? "↑" : "↓"}</span>}
+              </TableHead>
+              <TableHead
+                className={sortHeaderClass("w-32", sort.key === "lastSynced")}
+                aria-sort={
+                  sort.key === "lastSynced"
+                    ? sort.dir === "asc"
+                      ? "ascending"
+                      : "descending"
+                    : "none"
+                }
+                title={t("sortHint")}
+                onClick={() => setSort((s) => toggleSort(s, "lastSynced"))}
+              >
+                {t("colLastSynced")}
+                {sort.key === "lastSynced" && (
+                  <span className="ml-1">{sort.dir === "asc" ? "↑" : "↓"}</span>
+                )}
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -287,7 +424,7 @@ export function SyncPage({ token }: { token: string }) {
                     className="cursor-default select-none"
                     onDoubleClick={() => setEditor({ repo })}
                     onContextMenu={(e) => openMenu(e, repo)}
-                    title={repo.lastMessage ?? undefined}
+                    title={rowTitle(repo)}
                   >
                     <TableCell className="font-medium">{repo.name}</TableCell>
                     <TableCell>{remoteCell(repo)}</TableCell>

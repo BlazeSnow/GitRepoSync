@@ -33,6 +33,7 @@ export const en = {
   colTarget: "Target",
   colStatus: "Status",
   colLastSynced: "Last synced",
+  sortHint: "Click to toggle sort",
   notConfigured: "Not configured",
   statusIdle: "Not synced",
   statusRunning: "Syncing",

@@ -32,7 +32,7 @@
 
 1. **拉取**：从源仓库 fetch 最新状态到基地址中转目录（不合并工作区，不受本地未提交改动影响）
 2. **更新**：拉取 LFS 文件（需系统安装 [git-lfs](https://git-lfs.com)）与 submodule
-3. **推送**：把全部分支与标签推送到每个备份远端，并与之强制对齐（`--prune`）
+3. **推送**：先把全部 LFS 对象预上传到目标（`git lfs push --all`），再把全部分支与标签推送到每个备份远端，并与之强制对齐（`--prune`）；被 "LFS objects are missing" 拒绝时自动等待重传并重试一次
 
 多个备份目标依次推送，单个目标失败不影响其余目标；每个目标的状态独立记录。
 
@@ -81,7 +81,7 @@ git-repo-sync mcp         以 stdio 模式运行 MCP 服务
 ## 常见问题
 
 - **提示 git 命令失败？** 确认系统已安装 Git 并加入 PATH；私有仓库需提前配置好凭据（HTTPS 凭据管理器或 SSH 免密）
-- **LFS 文件没有备份？** 安装 [git-lfs](https://git-lfs.com) 后重新同步；备份目标为 GitLab 且走 SSH 时 LFS 对象不会上传，请改用 HTTPS 地址
+- **LFS 文件没有备份？** 安装 [git-lfs](https://git-lfs.com) 后重新同步；LFS 对象在推送前会预上传到每个目标（`git lfs push --all`），若目标行出现「LFS 对象预上传失败」警告，通常是目标侧 LFS 认证问题（SSH 目标走 HTTPS LFS 端点），请配置凭据助手或改用 HTTPS 地址
 - **仓库显示「未配置」？** 该仓库缺少 origin 源地址或没有任何备份目标远端，配置后即可参与同步
 
 ## 许可证

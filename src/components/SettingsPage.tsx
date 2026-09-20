@@ -153,46 +153,69 @@ export function SettingsPage({ token, username }: { token: string; username: str
           <CardTitle>{t("account")}</CardTitle>
           <CardDescription>{t("currentUser", { user: username })}</CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid gap-4 sm:grid-cols-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="old-pwd">{t("oldPassword")}</Label>
-              <Input
-                id="old-pwd"
-                type="password"
-                value={oldPwd}
-                onChange={(e) => setOldPwd(e.target.value)}
-              />
+        <CardContent>
+          {/* 真实 form 语义 + autocomplete 标注：密码管理器借此识别「修改密码」场景
+              （readonly 用户名字段用于关联凭据，current/new-password 区分新旧密码） */}
+          <form
+            className="space-y-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void handleChangePassword();
+            }}
+          >
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="pwd-username">{t("username")}</Label>
+                <Input
+                  id="pwd-username"
+                  type="text"
+                  value={username}
+                  readOnly
+                  autoComplete="username"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="old-pwd">{t("oldPassword")}</Label>
+                <Input
+                  id="old-pwd"
+                  type="password"
+                  value={oldPwd}
+                  onChange={(e) => setOldPwd(e.target.value)}
+                  autoComplete="current-password"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="new-pwd">{t("newPassword")}</Label>
+                <Input
+                  id="new-pwd"
+                  type="password"
+                  value={newPwd}
+                  onChange={(e) => setNewPwd(e.target.value)}
+                  autoComplete="new-password"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="confirm-pwd">{t("confirmPassword")}</Label>
+                <Input
+                  id="confirm-pwd"
+                  type="password"
+                  value={confirmPwd}
+                  onChange={(e) => setConfirmPwd(e.target.value)}
+                  autoComplete="new-password"
+                />
+              </div>
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="new-pwd">{t("newPassword")}</Label>
-              <Input
-                id="new-pwd"
-                type="password"
-                value={newPwd}
-                onChange={(e) => setNewPwd(e.target.value)}
-              />
+            <div className="flex items-center gap-3">
+              <Button type="submit" size="sm" disabled={!oldPwd || !newPwd}>
+                {t("changePassword")}
+              </Button>
+              {pwdMsg && (
+                <span className={`text-xs ${pwdMsg.ok ? "text-success" : "text-destructive"}`}>
+                  {pwdMsg.text}
+                </span>
+              )}
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="confirm-pwd">{t("confirmPassword")}</Label>
-              <Input
-                id="confirm-pwd"
-                type="password"
-                value={confirmPwd}
-                onChange={(e) => setConfirmPwd(e.target.value)}
-              />
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <Button size="sm" onClick={handleChangePassword} disabled={!oldPwd || !newPwd}>
-              {t("changePassword")}
-            </Button>
-            {pwdMsg && (
-              <span className={`text-xs ${pwdMsg.ok ? "text-success" : "text-destructive"}`}>
-                {pwdMsg.text}
-              </span>
-            )}
-          </div>
+          </form>
         </CardContent>
       </Card>
 

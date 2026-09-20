@@ -20,7 +20,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import { api } from "@/lib/api";
-import { SyncPage, filterStale } from "./SyncPage";
+import { SyncPage, filterStale, sortRepos, toggleSort, type SortSpec } from "./SyncPage";
 
 // vitest 非 globals 模式下 testing-library 不自动卸载，需手动清理
 afterEach(cleanup);
@@ -62,6 +62,8 @@ const backupTarget: Repo["targets"][number] = {
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  // 范围选择持久化到 localStorage：每个用例从干净状态开始
+  localStorage.clear();
   // 语言固定中文，断言界面文案
   const { default: i18next } = await import("i18next");
   await i18next.changeLanguage("zh");
@@ -224,6 +226,171 @@ it("表头/空白区右键仅阻止默认行为，不弹出菜单", async () => 
   fireEvent.contextMenu(screen.getByText("仓库"));
   expect(screen.queryByRole("button", { name: "编辑仓库" })).not.toBeInTheDocument();
   expect(container.querySelector(".bg-popover")).toBeNull();
+});
+
+it("切页（卸载）后重进保持同步范围选择，表格与计数随之恢复", async () => {
+  const now = Date.now();
+  const day = 86_400_000;
+  vi.mocked(api.discoverRepos).mockResolvedValue([
+    repo({ id: "fresh", name: "fresh", lastSynced: now, targets: [backupTarget] }),
+    repo({ id: "stale", name: "stale", lastSynced: now - 2 * day, targets: [backupTarget] }),
+  ]);
+  vi.mocked(api.listRepos).mockResolvedValue([]);
+
+  // 第一次进入：选择「1 天内未同步」（选择写入 localStorage）
+  const first = render(<SyncPage token="tok" />);
+  fireEvent.click(await screen.findByRole("combobox"));
+  fireEvent.click(await screen.findByRole("option", { name: "1 天内未同步" }));
+  await waitFor(() => expect(screen.queryByText("fresh")).not.toBeInTheDocument());
+  first.unmount();
+
+  // 第二次进入（模拟从日志页切回）：范围不重置为全部
+  render(<SyncPage token="tok" />);
+  await screen.findByRole("combobox");
+  expect(screen.getByRole("combobox")).toHaveTextContent("1 天内未同步");
+  expect(screen.queryByText("fresh")).not.toBeInTheDocument();
+  expect(screen.getByText("stale")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "开始同步（1 个）" })).toBeInTheDocument();
+});
+
+it("sortRepos：状态问题优先且未配置最后；时间从未同步最先；toggleSort 三态循环", () => {
+  const now = Date.now();
+  const day = 86_400_000;
+  const repos = [
+    repo({ id: "1", name: "a", lastStatus: "idle", lastSynced: now, targets: [backupTarget] }),
+    repo({ id: "2", name: "b", lastStatus: "failed", lastSynced: now - day, targets: [backupTarget] }),
+    repo({ id: "3", name: "c", lastStatus: "success", lastSynced: null, targets: [backupTarget] }),
+    repo({ id: "4", name: "d", lastStatus: "success", lastSynced: now, source: "", targets: [] }),
+  ];
+  const names = (rows: Repo[]) => rows.map((r) => r.name);
+
+  // 默认（null）保持名称序；名称升序与默认一致，降序反转
+  const def: SortSpec = { key: null, dir: "asc" };
+  expect(names(sortRepos(repos, def))).toEqual(["a", "b", "c", "d"]);
+  expect(names(sortRepos(repos, { key: "name", dir: "asc" }))).toEqual(["a", "b", "c", "d"]);
+  expect(names(sortRepos(repos, { key: "name", dir: "desc" }))).toEqual(["c", "b", "a", "d"]);
+  // 状态升序：失败 > 未同步 > 成功，未配置最后；降序相反
+  expect(names(sortRepos(repos, { key: "status", dir: "asc" }))).toEqual(["b", "a", "c", "d"]);
+  expect(names(sortRepos(repos, { key: "status", dir: "desc" }))).toEqual(["c", "a", "b", "d"]);
+  // 时间升序：从未同步（null）最先，其后从旧到新；降序相反
+  expect(names(sortRepos(repos, { key: "lastSynced", dir: "asc" }))).toEqual(["c", "b", "a", "d"]);
+  expect(names(sortRepos(repos, { key: "lastSynced", dir: "desc" }))).toEqual(["a", "b", "c", "d"]);
+
+  // 三态循环：未排 → 升 → 降 → 恢复默认
+  expect(toggleSort(def, "status")).toEqual({ key: "status", dir: "asc" });
+  expect(toggleSort({ key: "status", dir: "asc" }, "status")).toEqual({ key: "status", dir: "desc" });
+  expect(toggleSort({ key: "status", dir: "desc" }, "status")).toEqual(def);
+  // 换列直接从升序开始
+  expect(toggleSort({ key: "status", dir: "desc" }, "lastSynced")).toEqual({
+    key: "lastSynced",
+    dir: "asc",
+  });
+});
+
+it("点击状态/时间表头切换排序：升 → 降 → 恢复默认名称序", async () => {
+  const now = Date.now();
+  const day = 86_400_000;
+  vi.mocked(api.discoverRepos).mockResolvedValue([
+    repo({ id: "1", name: "alpha", lastStatus: "idle", lastSynced: now, targets: [backupTarget] }),
+    repo({
+      id: "2",
+      name: "beta",
+      lastStatus: "failed",
+      lastMessage: "boom",
+      lastSynced: now - day,
+      targets: [backupTarget],
+    }),
+    repo({ id: "3", name: "gamma", lastStatus: "success", lastSynced: null, targets: [backupTarget] }),
+  ]);
+  vi.mocked(api.listRepos).mockResolvedValue([]);
+
+  render(<SyncPage token="tok" />);
+  await screen.findByText("alpha");
+  // 表体行首列为仓库名
+  const names = () =>
+    screen
+      .getAllByRole("row")
+      .slice(1)
+      .map((r) => r.querySelector("td")?.textContent);
+  expect(names()).toEqual(["alpha", "beta", "gamma"]);
+
+  // 状态表头：升序（失败在前）带 ↑，再点降序，三点恢复默认
+  const statusHeader = screen.getByRole("columnheader", { name: /状态/ });
+  fireEvent.click(statusHeader);
+  expect(names()).toEqual(["beta", "alpha", "gamma"]);
+  expect(screen.getByRole("columnheader", { name: /状态/ })).toHaveTextContent("↑");
+  fireEvent.click(screen.getByRole("columnheader", { name: /状态/ }));
+  expect(names()).toEqual(["gamma", "alpha", "beta"]);
+  expect(screen.getByRole("columnheader", { name: /状态/ })).toHaveTextContent("↓");
+  fireEvent.click(screen.getByRole("columnheader", { name: /状态/ }));
+  expect(names()).toEqual(["alpha", "beta", "gamma"]);
+  expect(screen.getByRole("columnheader", { name: /状态/ })).not.toHaveTextContent("↑");
+
+  // 时间表头：升序从未同步在前，降序最新在前
+  fireEvent.click(screen.getByRole("columnheader", { name: /上次同步/ }));
+  expect(names()).toEqual(["gamma", "beta", "alpha"]);
+  fireEvent.click(screen.getByRole("columnheader", { name: /上次同步/ }));
+  expect(names()).toEqual(["alpha", "beta", "gamma"]);
+
+  // 名称表头：升序与默认一致（带 ↑），降序反转，三点恢复默认（箭头消失）
+  const nameHeader = screen.getByRole("columnheader", { name: /仓库/ });
+  fireEvent.click(nameHeader);
+  expect(names()).toEqual(["alpha", "beta", "gamma"]);
+  expect(screen.getByRole("columnheader", { name: /仓库/ })).toHaveTextContent("↑");
+  fireEvent.click(screen.getByRole("columnheader", { name: /仓库/ }));
+  expect(names()).toEqual(["gamma", "beta", "alpha"]);
+  expect(screen.getByRole("columnheader", { name: /仓库/ })).toHaveTextContent("↓");
+  fireEvent.click(screen.getByRole("columnheader", { name: /仓库/ }));
+  expect(names()).toEqual(["alpha", "beta", "gamma"]);
+  expect(screen.getByRole("columnheader", { name: /仓库/ })).not.toHaveTextContent("↑");
+});
+
+it("行悬停提示为结构化摘要：整体状态时间 + 各目标详情，而非统一的步骤汇总", async () => {
+  const now = Date.now();
+  const generic = "拉取源仓库更新；更新 LFS 文件；更新 submodule；推送到目标仓库";
+  vi.mocked(api.discoverRepos).mockResolvedValue([
+    repo({
+      id: "1",
+      name: "ok",
+      lastStatus: "success",
+      lastSynced: now,
+      lastMessage: generic,
+      targets: [{ ...backupTarget, lastStatus: "success", lastSynced: now }],
+    }),
+    repo({
+      id: "2",
+      name: "bad",
+      lastStatus: "failed",
+      lastSynced: null,
+      lastMessage: "推送到 gitlab 失败：LFS objects are missing",
+      targets: [
+        {
+          ...backupTarget,
+          lastStatus: "failed",
+          lastMessage: "推送到 gitlab 失败：LFS objects are missing",
+          lastSynced: null,
+        },
+      ],
+    }),
+  ]);
+  vi.mocked(api.listRepos).mockResolvedValue([]);
+
+  render(<SyncPage token="tok" />);
+  await screen.findByText("ok");
+
+  // 成功行：整体成功 + 目标成功；统一的步骤汇总不再作为悬停提示
+  const okRow = screen.getByText("ok").closest("tr") as HTMLElement;
+  const okTitle = okRow.getAttribute("title") ?? "";
+  expect(okTitle).toContain("成功");
+  expect(okTitle).toContain("backup：成功");
+  expect(okTitle).not.toContain("拉取源仓库更新");
+
+  // 失败行：整体失败 + 目标失败与错误详情
+  const badRow = screen.getByText("bad").closest("tr") as HTMLElement;
+  const badTitle = badRow.getAttribute("title") ?? "";
+  expect(badTitle).toContain("失败");
+  expect(badTitle).toContain("backup：失败");
+  expect(badTitle).toContain("LFS objects are missing");
 });
 
 it("编辑弹窗内删除仓库：右键编辑 → 删除仓库 → 确认后调用 deleteRepo", async () => {

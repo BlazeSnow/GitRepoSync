@@ -151,6 +151,17 @@ pub(crate) fn perform_git_sync(
             fatal: false,
             warn_key: "warn-lfs-fetch",
         });
+        // LFS locking 校验关闭（写入镜像仓库本地配置，幂等）：无人值守备份不应
+        // 因文件被他人加锁而失败，同时消除 git-lfs 对每个推送 ref 重复输出的
+        // "Locking support detected" 警告（设置后该端点的校验行为即为已决定）
+        steps.push(GitStep {
+            args: git_args(&["config", "lfs.locksverify", "false"]),
+            cwd: Some(local.clone()),
+            ok_msg: String::new(),
+            timeout: git_timeout,
+            fatal: false,
+            warn_key: "warn-lfs-config",
+        });
     } else {
         warnings.push(tr(lang, "lfs-skipped"));
     }
@@ -218,33 +229,91 @@ pub(crate) fn perform_git_sync(
             reset_running_targets(state, repo_id);
             return ("stopped".into(), tr(lang, "manually-stopped"));
         }
-        let mut push_cmd: Vec<String> =
-            vec!["push".into(), "--prune".into(), url.clone()];
-        push_cmd.extend(push_refs.clone());
-        let target_status;
-        match run_git(
+
+        // LFS 预上传：先把全部 LFS 对象（分支、标签与完整历史引用的）推到该目标，
+        // 避免目标侧 pre-receive 在 git push 竞态中因对象未就绪报 "LFS objects are missing"
+        // （对象只被 tag 或历史引用时，push 内嵌的 LFS 上传可能覆盖不到）
+        let mut lfs_warn: Option<String> = None;
+        if lfs_available {
+            if let Err(e) = run_git(
+                state,
+                repo_id,
+                &git_args(&["lfs", "push", "--all", url]),
+                Some(local.as_path()),
+                lfs_timeout,
+                lang,
+            ) {
+                if lock(&state.stop_requested).contains(repo_id) {
+                    reset_running_targets(state, repo_id);
+                    return ("stopped".into(), tr(lang, "manually-stopped"));
+                }
+                // 预上传失败不阻断 git push（目标可能不启用 LFS），作为警告并入消息
+                lfs_warn = Some(tr_a(lang, "warn-lfs-push", &[("err", &e)]));
+            }
+        }
+
+        let push_args = {
+            let mut v: Vec<String> = vec!["push".into(), "--prune".into(), url.clone()];
+            v.extend(push_refs.clone());
+            v
+        };
+        let mut push_result = run_git(
             state,
             repo_id,
-            &git_args(&push_cmd.iter().map(String::as_str).collect::<Vec<_>>()),
+            &push_args,
             Some(local.as_path()),
             git_timeout,
             lang,
-        ) {
+        );
+        // GitLab 竞态兜底：LFS 对象已上传但服务端尚未索引完成时，
+        // pre-receive 报 "LFS objects are missing"；等待后重传 LFS 并重试一次推送
+        if let Err(e) = &push_result {
+            if e.contains("LFS objects are missing") {
+                thread::sleep(Duration::from_secs(5));
+                if lfs_available {
+                    let _ = run_git(
+                        state,
+                        repo_id,
+                        &git_args(&["lfs", "push", "--all", url]),
+                        Some(local.as_path()),
+                        lfs_timeout,
+                        lang,
+                    );
+                }
+                push_result = run_git(
+                    state,
+                    repo_id,
+                    &push_args,
+                    Some(local.as_path()),
+                    git_timeout,
+                    lang,
+                );
+            }
+        }
+
+        let target_status;
+        match push_result {
             Err(e) => {
                 if lock(&state.stop_requested).contains(repo_id) {
                     reset_running_targets(state, repo_id);
                     return ("stopped".into(), tr(lang, "manually-stopped"));
                 }
                 any_fail = true;
+                // LFS 预上传警告存在时并入该目标的失败消息
+                let message = match &lfs_warn {
+                    Some(w) => format!("{}{}{}", w, lang.sep(), e),
+                    None => e,
+                };
                 target_errors.push(tr_a(
                     lang,
                     "push-target-failed",
-                    &[("remote", remote), ("err", &e)],
+                    &[("remote", remote), ("err", &message)],
                 ));
-                target_status = ("failed".to_string(), Some(e));
+                target_status = ("failed".to_string(), Some(message));
             }
             Ok(_) => {
-                target_status = ("success".to_string(), None);
+                // 预上传失败但推送成功：目标行保留警告，状态仍为 success
+                target_status = ("success".to_string(), lfs_warn);
             }
         }
         let conn = lock(&state.conn);
@@ -377,7 +446,7 @@ fn run_git(
         }
         text.push_str(&out_text);
     }
-    let text = text.trim().to_string();
+    let text = dedupe_lines(text.trim());
 
     if killed {
         return Err(tr(lang, "process-terminated"));
@@ -403,6 +472,18 @@ fn git_display_cmd(args: &[String]) -> String {
         .unwrap_or_else(|| "git".into())
 }
 
+/// 折叠输出中的连续重复行：git-lfs 会对每个推送 ref 重复输出
+/// "Locking support detected" 警告，一次推几十个 tag 时会刷爆存储的消息
+fn dedupe_lines(text: &str) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    for line in text.lines() {
+        if out.last() != Some(&line) {
+            out.push(line);
+        }
+    }
+    out.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -421,6 +502,15 @@ mod tests {
         assert_eq!(git_display_cmd(&args), "fetch");
         assert_eq!(git_display_cmd(&["push".to_string()]), "push");
         assert_eq!(git_display_cmd(&[]), "git");
+    }
+
+    /// 连续重复行折叠为单行（git-lfs 按 ref 重复输出 locking 警告），非连续重复保留
+    #[test]
+    fn dedupe_lines_collapses_consecutive_duplicates() {
+        let input = "a\na\na\nb\na\nc\nc";
+        assert_eq!(dedupe_lines(input), "a\nb\na\nc");
+        assert_eq!(dedupe_lines(""), "");
+        assert_eq!(dedupe_lines("only"), "only");
     }
 
     /// PATH 增强（macOS 图形界面启动找不到 Homebrew git-lfs 的修复）：

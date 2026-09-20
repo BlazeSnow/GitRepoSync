@@ -178,4 +178,43 @@ mod tests {
         drop(state);
         std::fs::remove_dir_all(&root).ok();
     }
+
+    /// 命令层全流程：登录失败与成功、会话恢复、改密（旧密码校验 + 新密码生效）、登出失效
+    #[test]
+    fn login_logout_and_password_change_flow() {
+        use crate::state::testutil::open_mock_app;
+        use tauri::Manager;
+
+        let (app, state, root) = open_mock_app("auth");
+        let st = app.state::<Arc<AppState>>();
+
+        // 错误密码：拒绝且留下失败日志
+        assert!(login(st.clone(), "admin".into(), "wrong".into(), None).is_err());
+        let logs: i64 = {
+            let conn = lock(&state.conn);
+            conn.query_row("SELECT COUNT(*) FROM operation_logs", [], |r| r.get(0))
+                .unwrap()
+        };
+        assert!(logs >= 1, "登录失败应写操作日志");
+
+        // 正确密码：登录成功，会话可恢复
+        let res = login(st.clone(), "admin".into(), "admin123".into(), Some(true)).unwrap();
+        assert_eq!(res.username, "admin");
+        assert_eq!(restore_session(st.clone(), res.token.clone()).unwrap(), "admin");
+
+        // 改密：旧密码错误拒绝；成功后旧密码失效、新密码可登录
+        assert!(change_password(st.clone(), res.token.clone(), "nope".into(), "newpass1".into()).is_err());
+        change_password(st.clone(), res.token.clone(), "admin123".into(), "newpass1".into()).unwrap();
+        assert!(login(st.clone(), "admin".into(), "admin123".into(), None).is_err(), "旧密码应失效");
+        let relogin = login(st.clone(), "admin".into(), "newpass1".into(), None).unwrap();
+
+        // 登出：令牌删除后会话失效
+        logout(st.clone(), relogin.token.clone()).unwrap();
+        assert!(restore_session(st.clone(), relogin.token).is_err());
+
+        drop(st);
+        drop(app);
+        drop(state);
+        std::fs::remove_dir_all(&root).ok();
+    }
 }

@@ -209,11 +209,81 @@ pub fn discover_repos(state: State<'_, Arc<AppState>>, token: String) -> Result<
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::state::testutil::{insert_session, open_mock_app};
+
     /// default_base_dir 是完整路径（state.rs 的函数，测试跟随函数所在模块语义）
     #[test]
     fn default_base_dir_is_absolute() {
         let d = crate::state::default_base_dir();
         assert!(d.ends_with("repo"));
         assert!(!d.starts_with('~'));
+    }
+
+    /// 命令层：新增（目标清洗）、重名拒绝、编辑整体替换目标、软删除后列表不可见、无效令牌拒绝
+    #[test]
+    fn save_list_delete_repo_commands() {
+        use tauri::Manager;
+        let (app, _state, root) = open_mock_app("repos");
+        let st = app.state::<Arc<AppState>>();
+        insert_session(_state.as_ref(), "tok");
+
+        // 新增：空目标行被清洗，列表可见且目标已附加
+        let repo = save_repo(
+            st.clone(),
+            "tok".into(),
+            None,
+            "demo".into(),
+            "https://src/demo.git".into(),
+            vec![
+                TargetInput { remote: "backup".into(), url: "https://bak/demo.git".into() },
+                TargetInput { remote: "  ".into(), url: "https://ignored.git".into() },
+            ],
+        )
+        .unwrap();
+        let list = list_repos(st.clone(), "tok".into()).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].targets.len(), 1, "空白目标行应被清洗");
+        assert_eq!(list[0].targets[0].remote, "backup");
+
+        // 重名（含与其他可见行重名）拒绝
+        assert!(save_repo(
+            st.clone(),
+            "tok".into(),
+            None,
+            "demo".into(),
+            "https://src/other.git".into(),
+            vec![],
+        )
+        .is_err());
+
+        // 编辑：改名并整体替换目标列表
+        let updated = save_repo(
+            st.clone(),
+            "tok".into(),
+            Some(repo.id.clone()),
+            "demo2".into(),
+            "https://src/demo.git".into(),
+            vec![
+                TargetInput { remote: "a".into(), url: "https://a.git".into() },
+                TargetInput { remote: "b".into(), url: "https://b.git".into() },
+            ],
+        )
+        .unwrap();
+        assert_eq!(updated.name, "demo2");
+        let list = list_repos(st.clone(), "tok".into()).unwrap();
+        assert_eq!(list[0].targets.len(), 2, "编辑应整体替换目标");
+
+        // 软删除：列表不可见；重复删除幂等成功（行仍存在只是隐藏）
+        delete_repo(st.clone(), "tok".into(), repo.id.clone()).unwrap();
+        assert!(list_repos(st.clone(), "tok".into()).unwrap().is_empty());
+        delete_repo(st.clone(), "tok".into(), repo.id).unwrap();
+
+        // 无效令牌拒绝
+        assert!(list_repos(st.clone(), "bad-token".into()).is_err());
+
+        drop(st);
+        drop(app);
+        std::fs::remove_dir_all(&root).ok();
     }
 }

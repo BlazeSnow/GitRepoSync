@@ -284,7 +284,7 @@ it("切页（卸载）后重进保持表格排序状态", async () => {
   expect(names()).toEqual(["gamma", "alpha", "beta"]);
 });
 
-it("sortRepos：状态问题优先、未配置行平等参与排序；时间从未同步最先；toggleSort 三态循环", () => {
+it("sortRepos：状态问题优先且未配置独立分组；时间从未同步最先；toggleSort 三态循环", () => {
   const now = Date.now();
   const day = 86_400_000;
   const repos = [
@@ -295,14 +295,15 @@ it("sortRepos：状态问题优先、未配置行平等参与排序；时间从�
   ];
   const names = (rows: Repo[]) => rows.map((r) => r.name);
 
-  // d 为未配置仓库：与普通行平等参与排序，随方向反转，不特殊垫底
+  // d 为未配置仓库（lastStatus 是成为未配置前的历史 success）：
+  // 状态排序按「未配置」独立分组，名称/时间排序平等参与、随方向反转
   const def: SortSpec = { key: null, dir: "asc" };
   expect(names(sortRepos(repos, def))).toEqual(["a", "b", "c", "d"]);
   expect(names(sortRepos(repos, { key: "name", dir: "asc" }))).toEqual(["a", "b", "c", "d"]);
   expect(names(sortRepos(repos, { key: "name", dir: "desc" }))).toEqual(["d", "c", "b", "a"]);
-  // 状态升序：失败 > 未同步 > 成功；未配置行按自身状态参与，降序反转
-  expect(names(sortRepos(repos, { key: "status", dir: "asc" }))).toEqual(["b", "a", "c", "d"]);
-  expect(names(sortRepos(repos, { key: "status", dir: "desc" }))).toEqual(["c", "d", "a", "b"]);
+  // 状态升序：失败 > 未配置 > 未同步 > 成功（d 不再凭历史值混入成功组）
+  expect(names(sortRepos(repos, { key: "status", dir: "asc" }))).toEqual(["b", "d", "a", "c"]);
+  expect(names(sortRepos(repos, { key: "status", dir: "desc" }))).toEqual(["c", "a", "d", "b"]);
   // 时间升序：从未同步（null）最先，其后从旧到新；降序相反
   expect(names(sortRepos(repos, { key: "lastSynced", dir: "asc" }))).toEqual(["c", "b", "a", "d"]);
   expect(names(sortRepos(repos, { key: "lastSynced", dir: "desc" }))).toEqual(["a", "d", "b", "c"]);
@@ -403,6 +404,7 @@ it("行悬停提示为结构化摘要：整体状态时间 + 各目标详情，�
         },
       ],
     }),
+    repo({ id: "3", name: "unconf", source: "", targets: [], lastStatus: "success", lastSynced: now }),
   ]);
   vi.mocked(api.listRepos).mockResolvedValue([]);
 
@@ -422,6 +424,12 @@ it("行悬停提示为结构化摘要：整体状态时间 + 各目标详情，�
   expect(badTitle).toContain("失败");
   expect(badTitle).toContain("backup：失败");
   expect(badTitle).toContain("LFS objects are missing");
+
+  // 未配置行：整体状态显示「未配置」，而非成为未配置前的历史状态（success）
+  const unconfRow = screen.getByText("unconf").closest("tr") as HTMLElement;
+  const unconfTitle = unconfRow.getAttribute("title") ?? "";
+  expect(unconfTitle).toContain("未配置");
+  expect(unconfTitle).not.toContain("成功");
 });
 
 it("编辑弹窗内删除仓库：右键编辑 → 删除仓库 → 确认后调用 deleteRepo", async () => {

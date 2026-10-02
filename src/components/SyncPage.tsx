@@ -94,19 +94,25 @@ export interface SortSpec {
   dir: "asc" | "desc";
 }
 
-/** 状态排序权重（升序 = 问题优先）：失败 > 同步中 > 已停止 > 未同步 > 成功 */
+/**
+ * 状态排序权重（升序 = 问题优先）：失败 > 同步中 > 已停止 > 未配置 > 未同步 > 成功。
+ * 「未配置」不是同步状态，是未配置仓库在状态排序中的独立分组——其 lastStatus
+ * 是成为未配置前的历史值，直接用会让「未配置」徽章混进成功/失败等组
+ */
 const STATUS_RANK: Record<string, number> = {
   failed: 0,
   running: 1,
   stopped: 2,
-  idle: 3,
-  success: 4,
+  unconfigured: 3,
+  idle: 4,
+  success: 5,
 };
 
 /**
  * 表格排序（纯前端，作用于范围过滤后的可见行）：
  * - 名称：与后端默认一致的字符串序（升序与默认相同），降序反转；
- * - 状态：升序按问题优先（失败 > 同步中 > 已停止 > 未同步 > 成功），降序反转；
+ * - 状态：升序按问题优先（失败 > 同步中 > 已停止 > 未配置 > 未同步 > 成功，
+ *   未配置按「未配置」独立分组而非其历史状态），降序反转；
  * - 上次同步：升序「从未同步」最先、其后按时间从旧到新，降序相反；
  * - 未配置仓库与普通行平等参与排序并随方向反转，不特殊垫底
  *   （升序与默认视图的名称序一致，行不会因点击表头跳动）；
@@ -126,8 +132,10 @@ export function sortRepos(repos: Repo[], sort: SortSpec): Repo[] {
       const bv = b.lastSynced ?? Number.NEGATIVE_INFINITY;
       cmp = av === bv ? 0 : av < bv ? -1 : 1;
     } else {
-      const av = STATUS_RANK[a.lastStatus] ?? 99;
-      const bv = STATUS_RANK[b.lastStatus] ?? 99;
+      const rank = (r: Repo) =>
+        STATUS_RANK[isUnconfigured(r) ? "unconfigured" : r.lastStatus] ?? 99;
+      const av = rank(a);
+      const bv = rank(b);
       cmp = av === bv ? 0 : av < bv ? -1 : 1;
     }
     return cmp * sign;
@@ -314,7 +322,7 @@ export function SyncPage({ token }: { token: string }) {
     const statusText = (s: SyncStatus) => statusBadge[s]?.label ?? statusBadge.idle.label;
     const clamp = (s: string, n = 200) => (s.length > n ? `${s.slice(0, n)}…` : s);
     const lines = [
-      `${t("colStatus")}：${statusText(r.lastStatus)} · ${t("colLastSynced")}：${relativeTime(r.lastSynced)}`,
+      `${t("colStatus")}：${isUnconfigured(r) ? t("notConfigured") : statusText(r.lastStatus)} · ${t("colLastSynced")}：${relativeTime(r.lastSynced)}`,
       ...r.targets.map((tg) => {
         const base = `${tg.remote}：${statusText(tg.lastStatus)}`;
         return tg.lastMessage ? `${base} · ${clamp(tg.lastMessage)}` : base;

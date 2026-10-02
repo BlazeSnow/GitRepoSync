@@ -43,6 +43,7 @@ export const en = {
   syncEmpty: "No repositories yet — click “Add repository” to get started",
   loading: "Loading…",
   editRepo: "Edit repository",
+  openDir: "Open directory",
   addRepoTitle: "Add repository",
   repoFlowDesc:
     "Sync pipeline: pull from the source into the local base directory (updating LFS and submodules), then push to the target repository. The target is a Git URL.",

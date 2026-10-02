@@ -24,7 +24,7 @@ import {
 import { ContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { RepoEditDialog } from "@/components/RepoEditDialog";
 import { DeleteRepoDialog } from "@/components/DeleteRepoDialog";
-import { IconPlus, IconRefresh, IconSquare } from "@/components/icons";
+import { IconEdit, IconFolder, IconPlus, IconRefresh, IconSquare, IconTrash } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { motion } from "motion/react";
 
@@ -288,10 +288,21 @@ export function SyncPage({ token }: { token: string }) {
     ? [
         {
           label: t("editRepo"),
+          icon: (cls) => <IconEdit className={cls} />,
           onSelect: () => setEditor({ repo: menu.repo }),
         },
         {
+          label: t("openDir"),
+          icon: (cls) => <IconFolder className={cls} />,
+          onSelect: () => {
+            void api
+              .openRepoDir(token, menu.repo.id)
+              .catch((err) => setError(String(err)));
+          },
+        },
+        {
           label: t("startSync"),
+          icon: (cls) => <IconRefresh className={cls} />,
           onSelect: () => {
             void api
               .startSync(token, [menu.repo.id])
@@ -299,7 +310,12 @@ export function SyncPage({ token }: { token: string }) {
               .catch((err) => setError(String(err)));
           },
         },
-        { label: t("confirmDelete"), danger: true, onSelect: () => setDeleteTarget(menu.repo) },
+        {
+          label: t("confirmDelete"),
+          icon: (cls) => <IconTrash className={cls} />,
+          danger: true,
+          onSelect: () => setDeleteTarget(menu.repo),
+        },
       ]
     : [];
 

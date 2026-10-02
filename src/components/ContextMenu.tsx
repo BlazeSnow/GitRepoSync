@@ -1,8 +1,10 @@
-import { useEffect } from "react";
+import { useEffect, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 export interface ContextMenuItem {
   label: string;
+  /** 菜单项图标（与侧边栏导航相同的工厂形式，接收尺寸类名） */
+  icon?: (cls: string) => ReactNode;
   danger?: boolean;
   onSelect: () => void;
 }
@@ -54,7 +56,7 @@ export function ContextMenu({
         <button
           key={item.label}
           className={cn(
-            "block w-full rounded-sm px-2 py-1.5 text-left text-sm outline-none hover:bg-accent",
+            "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm outline-none hover:bg-accent",
             item.danger && "text-destructive hover:bg-destructive/10",
           )}
           onClick={() => {
@@ -62,6 +64,11 @@ export function ContextMenu({
             item.onSelect();
           }}
         >
+          {item.icon && (
+            <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center">
+              {item.icon("h-4 w-4")}
+            </span>
+          )}
           {item.label}
         </button>
       ))}

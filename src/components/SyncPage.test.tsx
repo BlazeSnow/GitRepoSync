@@ -12,6 +12,7 @@ vi.mock("@/lib/api", () => ({
     stopSync: vi.fn(),
     saveRepo: vi.fn(),
     deleteRepo: vi.fn(),
+    openRepoDir: vi.fn(),
   },
 }));
 
@@ -186,12 +187,25 @@ it("右键表格行弹出菜单：立即同步、连续右键换行切换、点�
   render(<SyncPage token="tok" />);
   const alpha = await screen.findByText("alpha");
 
-  // 右键行 → 菜单出现（编辑 / 开始同步 / 删除）
+  // 右键行 → 菜单出现（编辑 / 打开目录 / 开始同步 / 删除），各项带图标
   fireEvent.contextMenu(alpha);
-  expect(screen.getByRole("button", { name: "编辑仓库" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "删除" })).toBeInTheDocument();
+  const menuEl = document.querySelector(".bg-popover") as HTMLElement;
+  const menuButtons = Array.from(menuEl.querySelectorAll("button"));
+  expect(menuButtons.map((b) => b.textContent)).toEqual([
+    "编辑仓库",
+    "打开目录",
+    "开始同步",
+    "删除",
+  ]);
+  expect(menuButtons.every((b) => b.querySelector("svg"))).toBe(true);
 
-  // 菜单中的「开始同步」（与工具栏按钮同名，取最后一个）针对该行发起同步
+  // 「打开目录」针对该行调用 openRepoDir（点击后菜单关闭）
+  vi.mocked(api.openRepoDir).mockResolvedValue(undefined);
+  fireEvent.click(screen.getByRole("button", { name: "打开目录" }));
+  await waitFor(() => expect(api.openRepoDir).toHaveBeenCalledWith("tok", "a"));
+
+  // 再次右键打开菜单：菜单中的「开始同步」（与工具栏按钮同名，取最后一个）针对该行发起同步
+  fireEvent.contextMenu(alpha);
   const syncButtons = screen.getAllByRole("button", { name: "开始同步" });
   fireEvent.click(syncButtons[syncButtons.length - 1]);
   await waitFor(() => expect(api.startSync).toHaveBeenCalledWith("tok", ["a"]));

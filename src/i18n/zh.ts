@@ -42,6 +42,7 @@ export const zh = {
   syncEmpty: "暂无仓库，点击右上角“添加仓库”开始",
   loading: "加载中…",
   editRepo: "编辑仓库",
+  openDir: "打开目录",
   addRepoTitle: "添加仓库",
   repoFlowDesc:
     "同步流程：从源仓库拉取到本地基地址中转（更新 LFS 与 submodule），再推送到目标仓库。目标地址为目标仓库的 Git URL。",

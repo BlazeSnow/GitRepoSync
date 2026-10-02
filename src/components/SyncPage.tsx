@@ -24,8 +24,10 @@ import {
 import { ContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { RepoEditDialog } from "@/components/RepoEditDialog";
 import { DeleteRepoDialog } from "@/components/DeleteRepoDialog";
-import { IconPlus, IconRefresh, IconSquare } from "@/components/icons";
+import { IconEdit, IconFolder, IconPlus, IconRefresh, IconSquare, IconTrash } from "@/components/icons";
+import { useToast } from "@/components/Toast";
 import { cn } from "@/lib/utils";
+import { motion } from "motion/react";
 
 const STALE_DAYS = [1, 3, 7, 30];
 
@@ -46,6 +48,26 @@ function loadStaleRange(): string {
   const v = localStorage.getItem(STALE_RANGE_KEY);
   if (v === null) return "all";
   return v === "all" || STALE_DAYS.map(String).includes(v) ? v : "all";
+}
+
+/** 表格排序的 localStorage 键：与同步范围一致，切页后保持上次选择 */
+const SORT_KEY = "grs_sort";
+const SORT_KEYS: SortKey[] = ["name", "status", "lastSynced"];
+const DEFAULT_SORT: SortSpec = { key: null, dir: "asc" };
+
+/** 读取持久化的排序状态，键或方向非法时回落默认名称序 */
+function loadSort(): SortSpec {
+  try {
+    const v = JSON.parse(localStorage.getItem(SORT_KEY) ?? "null") as Partial<SortSpec> | null;
+    const dir = v?.dir;
+    const key = v?.key ?? null;
+    if ((dir !== "asc" && dir !== "desc") || (key !== null && !SORT_KEYS.includes(key))) {
+      return DEFAULT_SORT;
+    }
+    return { key, dir };
+  } catch {
+    return DEFAULT_SORT;
+  }
 }
 
 /** 只有 origin（没有任何备份目标）或连源地址都没有的仓库视为未配置，不参与同步 */
@@ -73,30 +95,35 @@ export interface SortSpec {
   dir: "asc" | "desc";
 }
 
-/** 状态排序权重（升序 = 问题优先）：失败 > 同步中 > 已停止 > 未同步 > 成功 */
+/**
+ * 状态排序权重（升序 = 问题优先）：失败 > 同步中 > 已停止 > 未配置 > 未同步 > 成功。
+ * 「未配置」不是同步状态，是未配置仓库在状态排序中的独立分组——其 lastStatus
+ * 是成为未配置前的历史值，直接用会让「未配置」徽章混进成功/失败等组
+ */
 const STATUS_RANK: Record<string, number> = {
   failed: 0,
   running: 1,
   stopped: 2,
-  idle: 3,
-  success: 4,
+  unconfigured: 3,
+  idle: 4,
+  success: 5,
 };
 
 /**
  * 表格排序（纯前端，作用于范围过滤后的可见行）：
  * - 名称：与后端默认一致的字符串序（升序与默认相同），降序反转；
- * - 状态：升序按问题优先（失败 > 同步中 > 已停止 > 未同步 > 成功），降序反转；
+ * - 状态：升序按问题优先（失败 > 同步中 > 已停止 > 未配置 > 未同步 > 成功，
+ *   未配置按「未配置」独立分组而非其历史状态），降序反转；
  * - 上次同步：升序「从未同步」最先、其后按时间从旧到新，降序相反；
- * - 未配置仓库不参与方向反转，固定排在最后；
+ * - 未配置仓库与普通行平等参与排序并随方向反转，不特殊垫底
+ *   （升序与默认视图的名称序一致，行不会因点击表头跳动）；
  * - 同分时保持后端的名称顺序（Array.prototype.sort 稳定）
  */
 export function sortRepos(repos: Repo[], sort: SortSpec): Repo[] {
   if (sort.key === null) return repos;
   const sign = sort.dir === "asc" ? 1 : -1;
-  const configured: Repo[] = [];
-  const unconfiguredRows: Repo[] = [];
-  for (const r of repos) (isUnconfigured(r) ? unconfiguredRows : configured).push(r);
-  configured.sort((a, b) => {
+  // 拷贝后排序：stale === "all" 时入参就是 state 数组本体，不得原地修改
+  return [...repos].sort((a, b) => {
     let cmp: number;
     if (sort.key === "name") {
       // 与 SQLite ORDER BY name（UTF-8 字节序）保持一致的字符串比较
@@ -106,13 +133,14 @@ export function sortRepos(repos: Repo[], sort: SortSpec): Repo[] {
       const bv = b.lastSynced ?? Number.NEGATIVE_INFINITY;
       cmp = av === bv ? 0 : av < bv ? -1 : 1;
     } else {
-      const av = STATUS_RANK[a.lastStatus] ?? 99;
-      const bv = STATUS_RANK[b.lastStatus] ?? 99;
+      const rank = (r: Repo) =>
+        STATUS_RANK[isUnconfigured(r) ? "unconfigured" : r.lastStatus] ?? 99;
+      const av = rank(a);
+      const bv = rank(b);
       cmp = av === bv ? 0 : av < bv ? -1 : 1;
     }
     return cmp * sign;
   });
-  return [...configured, ...unconfiguredRows];
 }
 
 /** 表头点击的三态切换：未排 → 升序 → 降序 → 恢复默认名称序 */
@@ -122,8 +150,16 @@ export function toggleSort(current: SortSpec, key: SortKey): SortSpec {
   return { key: null, dir: "asc" };
 }
 
+/**
+ * 表体行（motion 包装）：排序/筛选导致行序变化时以位移动画过渡，不再瞬移。
+ * layout="position" 只动画位置、不缩放内容；同步事件驱动的 400ms 节流刷新中
+ * 行序不变时不产生动画。
+ */
+const MotionRow = motion.create(TableRow);
+
 export function SyncPage({ token }: { token: string }) {
   const { t } = useTranslation();
+  const toast = useToast();
   const [repos, setRepos] = useState<Repo[]>([]);
   const [stale, setStaleState] = useState(loadStaleRange);
   // 范围选择写入 localStorage：切到日志等页面再回来时保持，不重置为全部
@@ -131,8 +167,8 @@ export function SyncPage({ token }: { token: string }) {
     setStaleState(v);
     localStorage.setItem(STALE_RANGE_KEY, v);
   };
-  // 表格排序：默认按名称（后端返回顺序），点击状态/时间表头切换
-  const [sort, setSort] = useState<SortSpec>({ key: null, dir: "asc" });
+  // 表格排序：默认按名称（后端返回顺序），点击状态/时间表头切换；选择持久化到 localStorage
+  const [sort, setSort] = useState<SortSpec>(loadSort);
   // 编辑弹窗：null 表示添加，Repo 表示编辑；null 外层表示关闭
   const [editor, setEditor] = useState<{ repo: Repo | null } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Repo | null>(null);
@@ -179,6 +215,11 @@ export function SyncPage({ token }: { token: string }) {
     };
   }, [load]);
 
+  // 排序选择写入 localStorage：切页（组件卸载）后保持上次选择，与同步范围一致
+  useEffect(() => {
+    localStorage.setItem(SORT_KEY, JSON.stringify(sort));
+  }, [sort]);
+
   // 范围过滤结果再按表头选择排序：表格展示与「开始同步」的 id 列表共用
   const visibleRepos = useMemo(
     () => sortRepos(filterStale(repos, stale), sort),
@@ -194,23 +235,22 @@ export function SyncPage({ token }: { token: string }) {
   );
 
   async function handleStartSync() {
-    setError("");
     if (staleIds.length === 0) return;
     try {
-      await api.startSync(token, staleIds);
+      const started = await api.startSync(token, staleIds);
+      toast({ kind: "info", title: t("toastSyncStarted", { count: started }) });
       void load();
     } catch (err) {
-      setError(String(err));
+      toast({ kind: "error", title: String(err) });
     }
   }
 
   async function handleStopSync() {
-    setError("");
     try {
       await api.stopSync(token, null);
       void load();
     } catch (err) {
-      setError(String(err));
+      toast({ kind: "error", title: String(err) });
     }
   }
 
@@ -227,14 +267,15 @@ export function SyncPage({ token }: { token: string }) {
 
   async function handleDelete() {
     if (!deleteTarget) return;
-    setError("");
+    const name = deleteTarget.name;
     try {
       await api.deleteRepo(token, deleteTarget.id);
       setDeleteTarget(null);
+      toast({ kind: "success", title: t("toastRepoDeleted", { name }) });
       void load();
     } catch (err) {
       setDeleteTarget(null);
-      setError(String(err));
+      toast({ kind: "error", title: String(err) });
     }
   }
 
@@ -249,18 +290,34 @@ export function SyncPage({ token }: { token: string }) {
     ? [
         {
           label: t("editRepo"),
+          icon: (cls) => <IconEdit className={cls} />,
           onSelect: () => setEditor({ repo: menu.repo }),
         },
         {
+          label: t("openDir"),
+          icon: (cls) => <IconFolder className={cls} />,
+          onSelect: () => {
+            void api
+              .openRepoDir(token, menu.repo.id)
+              .catch((err) => toast({ kind: "error", title: String(err) }));
+          },
+        },
+        {
           label: t("startSync"),
+          icon: (cls) => <IconRefresh className={cls} />,
           onSelect: () => {
             void api
               .startSync(token, [menu.repo.id])
               .then(load)
-              .catch((err) => setError(String(err)));
+              .catch((err) => toast({ kind: "error", title: String(err) }));
           },
         },
-        { label: t("confirmDelete"), danger: true, onSelect: () => setDeleteTarget(menu.repo) },
+        {
+          label: t("confirmDelete"),
+          icon: (cls) => <IconTrash className={cls} />,
+          danger: true,
+          onSelect: () => setDeleteTarget(menu.repo),
+        },
       ]
     : [];
 
@@ -283,7 +340,7 @@ export function SyncPage({ token }: { token: string }) {
     const statusText = (s: SyncStatus) => statusBadge[s]?.label ?? statusBadge.idle.label;
     const clamp = (s: string, n = 200) => (s.length > n ? `${s.slice(0, n)}…` : s);
     const lines = [
-      `${t("colStatus")}：${statusText(r.lastStatus)} · ${t("colLastSynced")}：${relativeTime(r.lastSynced)}`,
+      `${t("colStatus")}：${isUnconfigured(r) ? t("notConfigured") : statusText(r.lastStatus)} · ${t("colLastSynced")}：${relativeTime(r.lastSynced)}`,
       ...r.targets.map((tg) => {
         const base = `${tg.remote}：${statusText(tg.lastStatus)}`;
         return tg.lastMessage ? `${base} · ${clamp(tg.lastMessage)}` : base;
@@ -411,7 +468,7 @@ export function SyncPage({ token }: { token: string }) {
           <TableBody>
             {visibleRepos.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={5} className="h-32 text-center text-muted-foreground">
+                <TableCell colSpan={4} className="h-32 text-center text-muted-foreground">
                   {stale === "all" ? t("syncEmpty") : t("staleEmpty")}
                 </TableCell>
               </TableRow>
@@ -419,8 +476,10 @@ export function SyncPage({ token }: { token: string }) {
               visibleRepos.map((repo) => {
                 const badge = statusBadge[repo.lastStatus] ?? statusBadge.idle;
                 return (
-                  <TableRow
+                  <MotionRow
                     key={repo.id}
+                    layout="position"
+                    transition={{ duration: 0.2, ease: "easeOut" }}
                     className="cursor-default select-none"
                     onDoubleClick={() => setEditor({ repo })}
                     onContextMenu={(e) => openMenu(e, repo)}
@@ -443,7 +502,7 @@ export function SyncPage({ token }: { token: string }) {
                     <TableCell className="text-muted-foreground">
                       {relativeTime(repo.lastSynced)}
                     </TableCell>
-                  </TableRow>
+                  </MotionRow>
                 );
               })
             )}
@@ -458,8 +517,12 @@ export function SyncPage({ token }: { token: string }) {
           token={token}
           repo={editor.repo}
           onClose={() => setEditor(null)}
-          onSaved={() => {
+          onSaved={(saved) => {
             setEditor(null);
+            toast({
+              kind: "success",
+              title: saved.id === editor.repo?.id ? t("toastRepoEdited", { name: saved.name }) : t("toastRepoAdded", { name: saved.name }),
+            });
             void load();
           }}
           onDelete={(r) => {

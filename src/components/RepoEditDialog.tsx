@@ -26,7 +26,8 @@ export function RepoEditDialog({
   token: string;
   repo: Repo | null;
   onClose: () => void;
-  onSaved: () => void;
+  /** 保存成功后回调（携带保存后的仓库，供父级 toast 提示） */
+  onSaved: (repo: Repo) => void;
   /** 编辑模式下显示「删除仓库」按钮，由父级执行删除（含确认弹窗） */
   onDelete?: (repo: Repo) => void;
 }) {
@@ -43,13 +44,13 @@ export function RepoEditDialog({
   async function handleSave() {
     setError("");
     try {
-      await api.saveRepo(token, {
+      const saved = await api.saveRepo(token, {
         id: repo?.id ?? null,
         name,
         source,
         targets: targets.filter((tg) => tg.remote.trim() || tg.url.trim()),
       });
-      onSaved();
+      onSaved(saved);
     } catch (err) {
       setError(String(err));
     }

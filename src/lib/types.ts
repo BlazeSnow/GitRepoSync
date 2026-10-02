@@ -38,6 +38,7 @@ export interface McpConfig {
 
 export interface SyncEvent {
   id: string;
+  name: string;
   status: SyncStatus;
   message: string | null;
   lastSynced: number | null;

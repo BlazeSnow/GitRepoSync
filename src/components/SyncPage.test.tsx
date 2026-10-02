@@ -12,6 +12,7 @@ vi.mock("@/lib/api", () => ({
     stopSync: vi.fn(),
     saveRepo: vi.fn(),
     deleteRepo: vi.fn(),
+    openRepoDir: vi.fn(),
   },
 }));
 
@@ -20,6 +21,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import { api } from "@/lib/api";
+import { ToastProvider } from "@/components/Toast";
 import { SyncPage, filterStale, sortRepos, toggleSort, type SortSpec } from "./SyncPage";
 
 // vitest 非 globals 模式下 testing-library 不自动卸载，需手动清理
@@ -113,13 +115,19 @@ it("全部配置齐全时「开始同步」可用，点击后按范围发起同�
   vi.mocked(api.listRepos).mockResolvedValue([]);
   vi.mocked(api.startSync).mockResolvedValue(1);
 
-  render(<SyncPage token="tok" />);
+  render(
+    <ToastProvider>
+      <SyncPage token="tok" />
+    </ToastProvider>,
+  );
   const button = await screen.findByRole("button", { name: "开始同步" });
   await waitFor(() => expect(button).toBeEnabled());
   fireEvent.click(button);
 
   await waitFor(() => expect(api.startSync).toHaveBeenCalled());
   expect(api.startSync).toHaveBeenCalledWith("tok", ["id-1"]);
+  // 开始同步的即时反馈（数量来自后端返回的实际启动数）
+  expect(await screen.findByText("已开始同步 1 个仓库")).toBeInTheDocument();
 });
 
 it("无同步运行时仅显示「开始同步」，停止按钮不出现", async () => {
@@ -186,12 +194,25 @@ it("右键表格行弹出菜单：立即同步、连续右键换行切换、点�
   render(<SyncPage token="tok" />);
   const alpha = await screen.findByText("alpha");
 
-  // 右键行 → 菜单出现（编辑 / 开始同步 / 删除）
+  // 右键行 → 菜单出现（编辑 / 打开目录 / 开始同步 / 删除），各项带图标
   fireEvent.contextMenu(alpha);
-  expect(screen.getByRole("button", { name: "编辑仓库" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "删除" })).toBeInTheDocument();
+  const menuEl = document.querySelector(".bg-popover") as HTMLElement;
+  const menuButtons = Array.from(menuEl.querySelectorAll("button"));
+  expect(menuButtons.map((b) => b.textContent)).toEqual([
+    "编辑仓库",
+    "打开目录",
+    "开始同步",
+    "删除",
+  ]);
+  expect(menuButtons.every((b) => b.querySelector("svg"))).toBe(true);
 
-  // 菜单中的「开始同步」（与工具栏按钮同名，取最后一个）针对该行发起同步
+  // 「打开目录」针对该行调用 openRepoDir（点击后菜单关闭）
+  vi.mocked(api.openRepoDir).mockResolvedValue(undefined);
+  fireEvent.click(screen.getByRole("button", { name: "打开目录" }));
+  await waitFor(() => expect(api.openRepoDir).toHaveBeenCalledWith("tok", "a"));
+
+  // 再次右键打开菜单：菜单中的「开始同步」（与工具栏按钮同名，取最后一个）针对该行发起同步
+  fireEvent.contextMenu(alpha);
   const syncButtons = screen.getAllByRole("button", { name: "开始同步" });
   fireEvent.click(syncButtons[syncButtons.length - 1]);
   await waitFor(() => expect(api.startSync).toHaveBeenCalledWith("tok", ["a"]));
@@ -253,7 +274,38 @@ it("切页（卸载）后重进保持同步范围选择，表格与计数随之�
   expect(screen.getByRole("button", { name: "开始同步（1 个）" })).toBeInTheDocument();
 });
 
-it("sortRepos：状态问题优先且未配置最后；时间从未同步最先；toggleSort 三态循环", () => {
+it("切页（卸载）后重进保持表格排序状态", async () => {
+  const now = Date.now();
+  const day = 86_400_000;
+  vi.mocked(api.discoverRepos).mockResolvedValue([
+    repo({ id: "1", name: "alpha", lastStatus: "idle", lastSynced: now, targets: [backupTarget] }),
+    repo({ id: "2", name: "beta", lastStatus: "failed", lastSynced: now - day, targets: [backupTarget] }),
+    repo({ id: "3", name: "gamma", lastStatus: "success", lastSynced: null, targets: [backupTarget] }),
+  ]);
+  vi.mocked(api.listRepos).mockResolvedValue([]);
+
+  // 第一次进入：状态表头点击两次切到降序（成功在前），选择写入 localStorage
+  const first = render(<SyncPage token="tok" />);
+  await screen.findByText("alpha");
+  const statusHeader = () => screen.getByRole("columnheader", { name: /状态/ });
+  fireEvent.click(statusHeader());
+  fireEvent.click(statusHeader());
+  expect(statusHeader()).toHaveTextContent("↓");
+  first.unmount();
+
+  // 第二次进入：排序状态保持为状态降序，表头箭头与行序随之恢复
+  render(<SyncPage token="tok" />);
+  await screen.findByText("gamma");
+  expect(statusHeader()).toHaveTextContent("↓");
+  const names = () =>
+    screen
+      .getAllByRole("row")
+      .slice(1)
+      .map((r) => r.querySelector("td")?.textContent);
+  expect(names()).toEqual(["gamma", "alpha", "beta"]);
+});
+
+it("sortRepos：状态问题优先且未配置独立分组；时间从未同步最先；toggleSort 三态循环", () => {
   const now = Date.now();
   const day = 86_400_000;
   const repos = [
@@ -264,17 +316,18 @@ it("sortRepos：状态问题优先且未配置最后；时间从未同步最先�
   ];
   const names = (rows: Repo[]) => rows.map((r) => r.name);
 
-  // 默认（null）保持名称序；名称升序与默认一致，降序反转
+  // d 为未配置仓库（lastStatus 是成为未配置前的历史 success）：
+  // 状态排序按「未配置」独立分组，名称/时间排序平等参与、随方向反转
   const def: SortSpec = { key: null, dir: "asc" };
   expect(names(sortRepos(repos, def))).toEqual(["a", "b", "c", "d"]);
   expect(names(sortRepos(repos, { key: "name", dir: "asc" }))).toEqual(["a", "b", "c", "d"]);
-  expect(names(sortRepos(repos, { key: "name", dir: "desc" }))).toEqual(["c", "b", "a", "d"]);
-  // 状态升序：失败 > 未同步 > 成功，未配置最后；降序相反
-  expect(names(sortRepos(repos, { key: "status", dir: "asc" }))).toEqual(["b", "a", "c", "d"]);
-  expect(names(sortRepos(repos, { key: "status", dir: "desc" }))).toEqual(["c", "a", "b", "d"]);
+  expect(names(sortRepos(repos, { key: "name", dir: "desc" }))).toEqual(["d", "c", "b", "a"]);
+  // 状态升序：失败 > 未配置 > 未同步 > 成功（d 不再凭历史值混入成功组）
+  expect(names(sortRepos(repos, { key: "status", dir: "asc" }))).toEqual(["b", "d", "a", "c"]);
+  expect(names(sortRepos(repos, { key: "status", dir: "desc" }))).toEqual(["c", "a", "d", "b"]);
   // 时间升序：从未同步（null）最先，其后从旧到新；降序相反
   expect(names(sortRepos(repos, { key: "lastSynced", dir: "asc" }))).toEqual(["c", "b", "a", "d"]);
-  expect(names(sortRepos(repos, { key: "lastSynced", dir: "desc" }))).toEqual(["a", "b", "c", "d"]);
+  expect(names(sortRepos(repos, { key: "lastSynced", dir: "desc" }))).toEqual(["a", "d", "b", "c"]);
 
   // 三态循环：未排 → 升 → 降 → 恢复默认
   expect(toggleSort(def, "status")).toEqual({ key: "status", dir: "asc" });
@@ -372,6 +425,7 @@ it("行悬停提示为结构化摘要：整体状态时间 + 各目标详情，�
         },
       ],
     }),
+    repo({ id: "3", name: "unconf", source: "", targets: [], lastStatus: "success", lastSynced: now }),
   ]);
   vi.mocked(api.listRepos).mockResolvedValue([]);
 
@@ -391,6 +445,12 @@ it("行悬停提示为结构化摘要：整体状态时间 + 各目标详情，�
   expect(badTitle).toContain("失败");
   expect(badTitle).toContain("backup：失败");
   expect(badTitle).toContain("LFS objects are missing");
+
+  // 未配置行：整体状态显示「未配置」，而非成为未配置前的历史状态（success）
+  const unconfRow = screen.getByText("unconf").closest("tr") as HTMLElement;
+  const unconfTitle = unconfRow.getAttribute("title") ?? "";
+  expect(unconfTitle).toContain("未配置");
+  expect(unconfTitle).not.toContain("成功");
 });
 
 it("编辑弹窗内删除仓库：右键编辑 → 删除仓库 → 确认后调用 deleteRepo", async () => {
@@ -398,7 +458,11 @@ it("编辑弹窗内删除仓库：右键编辑 → 删除仓库 → 确认后调
   vi.mocked(api.listRepos).mockResolvedValue([]);
   vi.mocked(api.deleteRepo).mockResolvedValue(undefined);
 
-  render(<SyncPage token="tok" />);
+  render(
+    <ToastProvider>
+      <SyncPage token="tok" />
+    </ToastProvider>,
+  );
 
   // 右键行打开菜单，进入编辑弹窗
   fireEvent.contextMenu(await screen.findByText("demo"));
@@ -410,6 +474,8 @@ it("编辑弹窗内删除仓库：右键编辑 → 删除仓库 → 确认后调
   fireEvent.click(screen.getByRole("button", { name: "删除" }));
 
   await waitFor(() => expect(api.deleteRepo).toHaveBeenCalledWith("tok", "id-1"));
+  // 删除成功的即时反馈
+  expect(await screen.findByText("已删除仓库「demo」")).toBeInTheDocument();
 });
 
 it("filterStale：all 显示全部；N 天范围仅保留已配置且超期或从未同步的仓库", () => {

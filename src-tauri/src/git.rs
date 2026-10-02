@@ -418,6 +418,19 @@ fn run_git(
                 },
             }
         }
+        // “停止同步”可能落在两条命令之间（此刻无子进程可杀，stop_sync 只能
+        // 登记停止请求）：轮询中自查该标记，出现即自行终止，停止延迟至多
+        // 一个轮询周期； LFS 重试等待期收到的请求也由此覆盖
+        if lock(&state.stop_requested).contains(repo_id) {
+            let mut slot = lock(&handle.child);
+            if let Some(c) = slot.as_mut() {
+                let _ = c.kill();
+                let _ = c.wait();
+            }
+            slot.take();
+            killed = true;
+            break;
+        }
         if Instant::now() >= deadline {
             {
                 let mut slot = lock(&handle.child);

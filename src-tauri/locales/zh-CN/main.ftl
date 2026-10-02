@@ -19,7 +19,9 @@ log-change-password = 修改密码
 # ---------- 仓库 ----------
 repo-fields-empty = 仓库名称、源地址、目标地址均不能为空
 repo-name-exists = 仓库名「{$name}」已存在
+repo-target-reserved = upstream 为保留远端名（fork 上游），不能作为备份目标
 repo-not-found = 仓库不存在
+repo-dir-not-exist = 本地目录不存在（尚未克隆？）：{$dir}
 repo-syncing = 该仓库正在同步，请先停止同步
 log-repo-added = 添加仓库「{$name}」
 log-repo-edited = 编辑仓库「{$name}」

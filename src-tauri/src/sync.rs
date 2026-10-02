@@ -15,6 +15,8 @@ use tauri::{AppHandle, Emitter, State};
 #[serde(rename_all = "camelCase")]
 pub struct SyncEvent {
     pub id: String,
+    /// 仓库名：toast 等监听方无需反查即可展示
+    pub name: String,
     pub status: String,
     pub message: Option<String>,
     pub last_synced: Option<i64>,
@@ -82,11 +84,14 @@ pub fn stop_sync(
                 let _ = c.wait();
             }
             slot.take();
-            lock(&state.stop_requested).insert(rid.clone());
-            stopped = true;
-        } else {
-            stopped = true;
         }
+        // 无论是否捕获到子进程都登记停止请求：请求可能落在两条 git 命令之间
+        //（此刻无子进程可杀、下一条尚未注册，如 LFS 重试的等待期），
+        // 运行中的命令由轮询自查该标记后终止，流水线在步骤边界收尾为 stopped。
+        // 若不登记，本次停止会被整条流水线忽略，且 syncing 已清空导致
+        // 再次按下停止命中空集合早退——按钮从此无响应
+        lock(&state.stop_requested).insert(rid.clone());
+        stopped = true;
     }
     if stopped {
         state.add_log(&tr(gui_lang(), "log-sync-stopped-cmd"), &username);
@@ -306,6 +311,7 @@ fn run_sync(
         app,
         SyncEvent {
             id: repo_id.to_string(),
+            name: repo.name.clone(),
             status: "running".into(),
             message: None,
             last_synced: repo.last_synced,
@@ -345,6 +351,7 @@ fn run_sync(
             app,
             SyncEvent {
                 id: repo_id.to_string(),
+                name: repo.name.clone(),
                 status: "failed".into(),
                 message: Some(msg),
                 last_synced: repo.last_synced,
@@ -368,6 +375,7 @@ fn run_sync(
             app,
             SyncEvent {
                 id: repo_id.to_string(),
+                name: repo.name.clone(),
                 status: "failed".into(),
                 message: Some(msg),
                 last_synced: repo.last_synced,
@@ -402,6 +410,7 @@ fn run_sync(
         app,
         SyncEvent {
             id: repo_id.to_string(),
+            name: repo.name.clone(),
             status,
             message: Some(message),
             last_synced: if success { Some(now_ms()) } else { repo.last_synced },
@@ -629,6 +638,103 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
         assert_eq!(status, "stopped", "停止后仓库状态应为 stopped");
+        drop(st);
+        drop(app);
+        drop(state);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 停止请求落在两条 git 命令之间（无存活子进程可杀）时仍需生效：
+    /// stop_sync 登记 stop_requested，运行中的命令轮询自查后自行终止，
+    /// 最终状态为 stopped——否则流水线忽略本次停止且 syncing 已清空，
+    /// 再次停止命中空集合早退，按钮无响应
+    #[test]
+    fn stop_sync_between_git_commands_still_stops() {
+        use crate::state::testutil::{insert_session, open_mock_app};
+        use tauri::Manager;
+
+        let (app, state, root) = open_mock_app("stopgap");
+        let st = app.state::<Arc<AppState>>();
+        insert_session(state.as_ref(), "tok");
+
+        // 与 stop_sync_kills_running_process_and_clears_state 相同的挂起 hook：
+        // pre-auto-gc 读 stdin 直到 EOF，git 命令长时间挂起
+        let repo_dir = root.join("busy");
+        std::fs::create_dir_all(&repo_dir).unwrap();
+        {
+            let conn = lock(&state.conn);
+            conn.execute(
+                "INSERT INTO repos (id, name, source) VALUES ('r1', 'busy', ?1)",
+                params![repo_dir.to_string_lossy()],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO sync_targets (repo_id, remote, url) VALUES ('r1', 'backup', ?1)",
+                params![repo_dir.join("b.git").to_string_lossy()],
+            )
+            .unwrap();
+        }
+        let git = |args: &[&str]| {
+            let s = std::process::Command::new("git")
+                .args(args)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .current_dir(&repo_dir)
+                .status()
+                .unwrap();
+            assert!(s.success(), "git {:?} 失败", args);
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["config", "user.name", "t"]);
+        git(&["config", "user.email", "t@t"]);
+        std::fs::write(repo_dir.join("a.txt"), "v").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "v"]);
+        let hooks = repo_dir.join(".git").join("hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        #[cfg(windows)]
+        let hook_body = "@echo off\r\nmore\r\n";
+        #[cfg(not(windows))]
+        let hook_body = "#!/bin/sh\ncat\n";
+        std::fs::write(hooks.join("pre-auto-gc"), hook_body).unwrap();
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(hooks.join("pre-auto-gc"), std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
+
+        let started = spawn_sync(state.clone(), None, "r1".into(), "test".into(), crate::lang::Lang::Zh);
+        assert!(started);
+
+        // 等 git 子进程注册后手动移除句柄：模拟“上一条命令已结束、
+        // 下一条尚未注册”的命令间隙（此窗口内 stop_sync 无子进程可杀）
+        let mut waited = 0;
+        while lock(&state.sync_procs).is_empty() {
+            if waited > 200 {
+                panic!("同步子进程未启动");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            waited += 1;
+        }
+        lock(&state.sync_procs).remove("r1");
+
+        stop_sync(st.clone(), "tok".into(), None).unwrap();
+        // 停止请求经 stop_requested 被运行中的命令自查到：轮询至收尾为 stopped
+        let mut status = String::new();
+        for _ in 0..200 {
+            status = {
+                let conn = lock(&state.conn);
+                conn.query_row("SELECT last_status FROM repos WHERE id = 'r1'", [], |r| {
+                    r.get::<_, String>(0)
+                })
+                .unwrap_or_default()
+            };
+            if status == "stopped" && lock(&state.syncing).is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert_eq!(status, "stopped", "命令间隙收到的停止仍应生效");
         drop(st);
         drop(app);
         drop(state);

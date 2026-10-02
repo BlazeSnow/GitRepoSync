@@ -34,6 +34,9 @@ export const api = {
   deleteRepo(token: string, id: string) {
     return invoke<void>("delete_repo", { token, id });
   },
+  openRepoDir(token: string, id: string) {
+    return invoke<void>("open_repo_dir", { token, id });
+  },
   startSync(token: string, ids: string[]) {
     return invoke<number>("start_sync", { token, ids });
   },

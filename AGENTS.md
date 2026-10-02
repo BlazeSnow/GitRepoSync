@@ -2,7 +2,7 @@
 
 1. 禁止修改本文件
 2. 开发过程中需要处理终端GBK与UTF-8的关系
-3. 更新完一项功能后，修改CHANGELOG.md和DEVELOPMENT.md
+3. 更新完一项功能后，修改DEVELOPMENT.md
 
 ## 软件架构
 

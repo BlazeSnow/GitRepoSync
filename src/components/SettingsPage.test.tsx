@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 
 // api 与系统对话框打桩：组件测试不触碰后端与原生对话框
 vi.mock("@/lib/api", () => ({
@@ -25,6 +25,20 @@ import { SettingsPage } from "./SettingsPage";
 
 // vitest 非 globals 模式下 testing-library 不自动卸载，需手动清理
 afterEach(cleanup);
+
+beforeAll(() => {
+  // Radix Select 依赖的浏览器 API 在 jsdom 中缺失：滚动、尺寸观察与指针捕获打桩
+  Element.prototype.scrollIntoView = vi.fn() as unknown as typeof Element.prototype.scrollIntoView;
+  Element.prototype.hasPointerCapture = () => false;
+  Element.prototype.setPointerCapture = () => {};
+  Element.prototype.releasePointerCapture = () => {};
+  class ResizeObserverStub {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = ResizeObserverStub;
+});
 
 beforeEach(async () => {
   vi.clearAllMocks();
@@ -81,19 +95,25 @@ it("修改密码表单具备密码管理器语义：form 提交与 autocomplete 
   );
 });
 
-it("主题卡片：点击深色立即应用 .dark 并持久化，点击浅色恢复", async () => {
+it("外观卡片：下拉选择深色立即应用 .dark 并持久化，浅色恢复", async () => {
   render(<SettingsPage token="tok" username="admin" />);
-  const darkButton = await screen.findByRole("button", { name: "深色" });
-  fireEvent.click(darkButton);
+  // jsdom 下 Radix trigger 的指针类型初始为 touch：click 即打开下拉；
+  // 选中选项走 onClick 路径（fireEvent.click）
+  const openTheme = async (name: string) => {
+    fireEvent.click(screen.getByRole("combobox", { name: "外观" }));
+    fireEvent.click(await screen.findByRole("option", { name }));
+  };
+
+  await openTheme("深色");
   expect(document.documentElement.classList.contains("dark")).toBe(true);
   expect(localStorage.getItem("grs_theme")).toBe("dark");
 
-  fireEvent.click(screen.getByRole("button", { name: "浅色" }));
+  await openTheme("浅色");
   expect(document.documentElement.classList.contains("dark")).toBe(false);
   expect(localStorage.getItem("grs_theme")).toBe("light");
 
   // 跟随系统：系统为浅色（桩）时不加深色类
-  fireEvent.click(screen.getByRole("button", { name: "跟随系统" }));
+  await openTheme("跟随系统");
   expect(document.documentElement.classList.contains("dark")).toBe(false);
   expect(localStorage.getItem("grs_theme")).toBe("system");
 });

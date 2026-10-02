@@ -111,7 +111,7 @@
 ## 8. 多语言（中文 / English）
 
 - 后端采用 [fluent-i18n](https://crates.io/crates/fluent-i18n)，全部文案集中在 `src-tauri/locales/zh-CN/main.ftl`（默认与回落语言）与 `en-US/main.ftl`，编译期内嵌
-- 前端采用 [react-i18next](https://react.i18next.dev/)（词典拆分 `src/i18n/zh.ts` 与 `en.ts`，新增键需两文件同步），设置页提供语言卡片切换语言，选择存入 localStorage，首次启动按浏览器语言自动选择
+- 前端采用 [react-i18next](https://react.i18next.dev/)（词典拆分 `src/i18n/zh.ts` 与 `en.ts`，新增键需两文件同步），设置页语言卡片以下拉选框切换语言（选项固定显示中文/English 原文，不随界面语言翻译），选择存入 localStorage，首次启动按浏览器语言自动选择
 - 语言选择规则：
   - GUI：前端切换语言时通过 `set_lang` 命令同步到后端，之后的错误提示、日志、同步结果按该语言记录
   - MCP：按 initialize 请求的 `locale` 字段返回工具描述与运行时消息；环境变量 `GIT_REPO_SYNC_LANG`（`zh` / `en`）可强制指定
@@ -121,7 +121,7 @@
 
 ## 9. 外观主题（深色模式）
 
-- 默认跟随系统深浅色（`prefers-color-scheme`），系统切换时即时生效；设置页「外观」卡片可手动指定：跟随系统 / 浅色 / 深色，选择存入 localStorage（`grs_theme`）
+- 默认跟随系统深浅色（`prefers-color-scheme`），系统切换时即时生效；设置页「外观」卡片通过下拉选框手动指定：跟随系统 / 浅色 / 深色，选择存入 localStorage（`grs_theme`）
 - 实现：Tailwind v4 按类名切换深色（`@custom-variant dark`，`<html class="dark">`）；深色调色板集中在 `src/index.css` 的 `.dark` 变量块，组件全部使用语义色（`bg-background` / `text-foreground` 等），整体换肤无需逐组件适配；`color-scheme` 随主题同步切换，滚动条与原生控件跟随
 - 首帧防闪烁：`index.html` 内联脚本在渲染前读取偏好并应用 `.dark` 类，避免深色系统下启动白屏；`src/lib/theme.ts` 负责偏好读写、主题应用与系统主题变化监听
 

@@ -6,8 +6,15 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useTranslation } from "react-i18next";
-import { changeAppLang } from "@/i18n";
+import { changeAppLang, type Lang } from "@/i18n";
 import { getThemePref, setThemePref, type ThemePref } from "@/lib/theme";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -89,14 +96,19 @@ export function SettingsPage({ token, username }: { token: string; username: str
           <CardDescription>{t("langDesc")}</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="flex gap-2">
-            <Button variant={isZh ? "default" : "outline"} onClick={() => void changeAppLang("zh")}>
-              中文
-            </Button>
-            <Button variant={!isZh ? "default" : "outline"} onClick={() => void changeAppLang("en")}>
-              English
-            </Button>
-          </div>
+          {/* 语言名固定显示原文（不随界面语言翻译），便于在任何语言下找到 */}
+          <Select
+            value={isZh ? "zh" : "en"}
+            onValueChange={(v) => void changeAppLang(v as Lang)}
+          >
+            <SelectTrigger className="w-40" aria-label="语言 / Language">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="zh">中文</SelectItem>
+              <SelectItem value="en">English</SelectItem>
+            </SelectContent>
+          </Select>
         </CardContent>
       </Card>
 
@@ -106,23 +118,16 @@ export function SettingsPage({ token, username }: { token: string; username: str
           <CardDescription>{t("themeDesc")}</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="flex gap-2">
-            {(
-              [
-                ["system", t("themeSystem")],
-                ["light", t("themeLight")],
-                ["dark", t("themeDark")],
-              ] as [ThemePref, string][]
-            ).map(([pref, label]) => (
-              <Button
-                key={pref}
-                variant={theme === pref ? "default" : "outline"}
-                onClick={() => pickTheme(pref)}
-              >
-                {label}
-              </Button>
-            ))}
-          </div>
+          <Select value={theme} onValueChange={(v) => pickTheme(v as ThemePref)}>
+            <SelectTrigger className="w-40" aria-label={t("appearanceTitle")}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="system">{t("themeSystem")}</SelectItem>
+              <SelectItem value="light">{t("themeLight")}</SelectItem>
+              <SelectItem value="dark">{t("themeDark")}</SelectItem>
+            </SelectContent>
+          </Select>
         </CardContent>
       </Card>
 

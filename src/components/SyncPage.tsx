@@ -26,6 +26,7 @@ import { RepoEditDialog } from "@/components/RepoEditDialog";
 import { DeleteRepoDialog } from "@/components/DeleteRepoDialog";
 import { IconPlus, IconRefresh, IconSquare } from "@/components/icons";
 import { cn } from "@/lib/utils";
+import { motion } from "motion/react";
 
 const STALE_DAYS = [1, 3, 7, 30];
 
@@ -139,6 +140,13 @@ export function toggleSort(current: SortSpec, key: SortKey): SortSpec {
   if (current.dir === "asc") return { key, dir: "desc" };
   return { key: null, dir: "asc" };
 }
+
+/**
+ * 表体行（motion 包装）：排序/筛选导致行序变化时以位移动画过渡，不再瞬移。
+ * layout="position" 只动画位置、不缩放内容；同步事件驱动的 400ms 节流刷新中
+ * 行序不变时不产生动画。
+ */
+const MotionRow = motion.create(TableRow);
 
 export function SyncPage({ token }: { token: string }) {
   const { t } = useTranslation();
@@ -442,8 +450,10 @@ export function SyncPage({ token }: { token: string }) {
               visibleRepos.map((repo) => {
                 const badge = statusBadge[repo.lastStatus] ?? statusBadge.idle;
                 return (
-                  <TableRow
+                  <MotionRow
                     key={repo.id}
+                    layout="position"
+                    transition={{ duration: 0.2, ease: "easeOut" }}
                     className="cursor-default select-none"
                     onDoubleClick={() => setEditor({ repo })}
                     onContextMenu={(e) => openMenu(e, repo)}
@@ -466,7 +476,7 @@ export function SyncPage({ token }: { token: string }) {
                     <TableCell className="text-muted-foreground">
                       {relativeTime(repo.lastSynced)}
                     </TableCell>
-                  </TableRow>
+                  </MotionRow>
                 );
               })
             )}

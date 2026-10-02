@@ -48,6 +48,26 @@ function loadStaleRange(): string {
   return v === "all" || STALE_DAYS.map(String).includes(v) ? v : "all";
 }
 
+/** 表格排序的 localStorage 键：与同步范围一致，切页后保持上次选择 */
+const SORT_KEY = "grs_sort";
+const SORT_KEYS: SortKey[] = ["name", "status", "lastSynced"];
+const DEFAULT_SORT: SortSpec = { key: null, dir: "asc" };
+
+/** 读取持久化的排序状态，键或方向非法时回落默认名称序 */
+function loadSort(): SortSpec {
+  try {
+    const v = JSON.parse(localStorage.getItem(SORT_KEY) ?? "null") as Partial<SortSpec> | null;
+    const dir = v?.dir;
+    const key = v?.key ?? null;
+    if ((dir !== "asc" && dir !== "desc") || (key !== null && !SORT_KEYS.includes(key))) {
+      return DEFAULT_SORT;
+    }
+    return { key, dir };
+  } catch {
+    return DEFAULT_SORT;
+  }
+}
+
 /** 只有 origin（没有任何备份目标）或连源地址都没有的仓库视为未配置，不参与同步 */
 const isUnconfigured = (r: Repo) => !r.source || r.targets.length === 0;
 
@@ -129,8 +149,8 @@ export function SyncPage({ token }: { token: string }) {
     setStaleState(v);
     localStorage.setItem(STALE_RANGE_KEY, v);
   };
-  // 表格排序：默认按名称（后端返回顺序），点击状态/时间表头切换
-  const [sort, setSort] = useState<SortSpec>({ key: null, dir: "asc" });
+  // 表格排序：默认按名称（后端返回顺序），点击状态/时间表头切换；选择持久化到 localStorage
+  const [sort, setSort] = useState<SortSpec>(loadSort);
   // 编辑弹窗：null 表示添加，Repo 表示编辑；null 外层表示关闭
   const [editor, setEditor] = useState<{ repo: Repo | null } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Repo | null>(null);
@@ -176,6 +196,11 @@ export function SyncPage({ token }: { token: string }) {
       if (reloadTimer.current !== null) window.clearTimeout(reloadTimer.current);
     };
   }, [load]);
+
+  // 排序选择写入 localStorage：切页（组件卸载）后保持上次选择，与同步范围一致
+  useEffect(() => {
+    localStorage.setItem(SORT_KEY, JSON.stringify(sort));
+  }, [sort]);
 
   // 范围过滤结果再按表头选择排序：表格展示与「开始同步」的 id 列表共用
   const visibleRepos = useMemo(

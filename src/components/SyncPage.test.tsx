@@ -253,6 +253,37 @@ it("切页（卸载）后重进保持同步范围选择，表格与计数随之�
   expect(screen.getByRole("button", { name: "开始同步（1 个）" })).toBeInTheDocument();
 });
 
+it("切页（卸载）后重进保持表格排序状态", async () => {
+  const now = Date.now();
+  const day = 86_400_000;
+  vi.mocked(api.discoverRepos).mockResolvedValue([
+    repo({ id: "1", name: "alpha", lastStatus: "idle", lastSynced: now, targets: [backupTarget] }),
+    repo({ id: "2", name: "beta", lastStatus: "failed", lastSynced: now - day, targets: [backupTarget] }),
+    repo({ id: "3", name: "gamma", lastStatus: "success", lastSynced: null, targets: [backupTarget] }),
+  ]);
+  vi.mocked(api.listRepos).mockResolvedValue([]);
+
+  // 第一次进入：状态表头点击两次切到降序（成功在前），选择写入 localStorage
+  const first = render(<SyncPage token="tok" />);
+  await screen.findByText("alpha");
+  const statusHeader = () => screen.getByRole("columnheader", { name: /状态/ });
+  fireEvent.click(statusHeader());
+  fireEvent.click(statusHeader());
+  expect(statusHeader()).toHaveTextContent("↓");
+  first.unmount();
+
+  // 第二次进入：排序状态保持为状态降序，表头箭头与行序随之恢复
+  render(<SyncPage token="tok" />);
+  await screen.findByText("gamma");
+  expect(statusHeader()).toHaveTextContent("↓");
+  const names = () =>
+    screen
+      .getAllByRole("row")
+      .slice(1)
+      .map((r) => r.querySelector("td")?.textContent);
+  expect(names()).toEqual(["gamma", "alpha", "beta"]);
+});
+
 it("sortRepos：状态问题优先、未配置行平等参与排序；时间从未同步最先；toggleSort 三态循环", () => {
   const now = Date.now();
   const day = 86_400_000;

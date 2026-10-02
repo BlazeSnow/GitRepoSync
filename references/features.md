@@ -17,7 +17,7 @@
 
 其他保障：
 
-- 每个网络 git 命令带超时（默认 1800s，LFS 3600s）与 HTTP 低速中断（停滞 120s 判死），超时或“停止同步”时强杀子进程
+- 每个网络 git 命令带超时（默认 1800s，LFS 3600s）与 HTTP 低速中断（停滞 120s 判死），超时或“停止同步”时强杀子进程；「停止同步」落在两条命令的间隙（如 LFS 重试等待期）同样生效——停止请求入库内标记，运行中的命令轮询自查（至多一个轮询周期内终止），流水线在步骤边界收尾为 stopped
 - 多个仓库**串行**同步（内部队列依次执行），避免并发拉取抢占网络
 - 同步期间 `GIT_TERMINAL_PROMPT=0`，避免私有仓库卡在交互式输入
 - git 子进程 PATH 增强：图形界面（尤其 macOS 从 Finder/Dock 启动）继承的 PATH 极简，Homebrew 等用户级安装的 git-lfs 与凭据助手不在其中；启动时为所有 git 子进程补充常见安装目录（Homebrew / MacPorts / Linuxbrew，目录存在且未收录才追加，原 PATH 优先级不变），避免 LFS 误报未安装
@@ -128,6 +128,6 @@
 ## 10. 测试
 
 - 运行：`pnpm test`（前端 vitest + jsdom + @testing-library/react）、`cd src-tauri && cargo test`（后端）
-- 后端（34 个）：Tauri 命令层借助 `tauri::test` 的 mock 运行时直接测试（`state.rs` 的 `testutil::open_mock_app` 提供独立临时数据库的 mock 应用）——登录/登出/改密全流程（auth）、仓库 CRUD 含目标清洗/重名/软删除幂等（repos）、基地址与 APIKEY 与日志（settings）、多目标推送独立失败语义（git）、停止同步终止 git 子进程（sync）；另有流水线端到端（真实 git 子进程，本地 bare 仓库）、路径归一化、自动发现、MCP 协议层与工具语义、旧库迁移等
+- 后端（38 个）：Tauri 命令层借助 `tauri::test` 的 mock 运行时直接测试（`state.rs` 的 `testutil::open_mock_app` 提供独立临时数据库的 mock 应用）——登录/登出/改密全流程（auth）、仓库 CRUD 含目标清洗/重名/软删除幂等（repos）、基地址与 APIKEY 与日志（settings）、多目标推送独立失败语义（git）、停止同步终止 git 子进程与命令间隙停止（sync）；另有流水线端到端（真实 git 子进程，本地 bare 仓库）、路径归一化、自动发现、MCP 协议层与工具语义、旧库迁移等
 - 前端（42 个）：外观主题、多语言时间格式化、类名工具、i18n 词典键两语言一致；组件渲染与交互——登录页、同步仓库页（范围筛选、按钮互斥、刷新仓库、表格排序与排序持久化、Radix Select 交互）、日志页、MCP 页、设置页、仓库编辑弹窗、侧边栏布局
 - 测试约定：前端组件测试统一在 beforeEach 中先 `import("@/i18n")` 触发 i18next 实例初始化再 `changeLanguage("zh")`；涉及 Radix Select 的用例需为 jsdom 打桩 `scrollIntoView` / pointer capture / `ResizeObserver`，选中选项走 `fireEvent.click`（pointerup 合成事件在 jsdom 不生效）；后端命令层测试各自使用独立临时目录数据库，结束时清理

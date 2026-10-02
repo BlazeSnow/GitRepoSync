@@ -84,6 +84,14 @@ pub fn save_repo(
         })
         .filter(|t| !t.remote.is_empty() && !t.url.is_empty())
         .collect();
+    // upstream 为保留远端名（fork 上游，自动发现排除）：不得作为备份目标，
+    // 否则会在下次发现时被静默移除
+    if targets
+        .iter()
+        .any(|t| t.remote == crate::discover::RESERVED_TARGET_REMOTE)
+    {
+        return Err(tr(lang, "repo-target-reserved"));
+    }
     let repo = {
         let conn = lock(&state.conn);
         if let Some(rid) = &id {
@@ -254,6 +262,20 @@ mod tests {
             "demo".into(),
             "https://src/other.git".into(),
             vec![],
+        )
+        .is_err());
+
+        // upstream 为保留远端名（fork 上游）：拒绝作为备份目标
+        assert!(save_repo(
+            st.clone(),
+            "tok".into(),
+            None,
+            "fork".into(),
+            "https://src/fork.git".into(),
+            vec![TargetInput {
+                remote: "upstream".into(),
+                url: "https://orig/fork.git".into(),
+            }],
         )
         .is_err());
 

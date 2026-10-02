@@ -7,6 +7,11 @@ use rusqlite::params;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
+/// 保留远端名：fork 场景的上游远端。不作为备份目标——自动发现排除之，
+/// 保存入口（界面 / MCP）拒绝之，避免把用户的 fork 反向推送回原仓库；
+/// 历史数据中已登记的 upstream 目标由发现的远端集合同步自动移除
+pub(crate) const RESERVED_TARGET_REMOTE: &str = "upstream";
+
 /// 解析仓库 .git/config 中的远端表（name -> url），不 spawn git 进程：
 /// 仓库多时逐个调用 git 子进程在 Windows 上极慢（每次数百毫秒到数秒）。
 /// 支持工作树（.git 为文件，内容 gitdir: <路径>）。
@@ -88,7 +93,7 @@ pub fn discover(state: &AppState, operator: &str, lang: Lang) -> Result<(), Stri
                 .map(|(_, u)| u.clone());
             let targets: Vec<(String, String)> = remotes
                 .into_iter()
-                .filter(|(n, _)| n != "origin")
+                .filter(|(n, _)| n != "origin" && n != RESERVED_TARGET_REMOTE)
                 .collect();
             found.push((name.to_string(), origin, targets));
         }
@@ -213,6 +218,12 @@ mod tests {
         std::fs::create_dir_all(&beta).unwrap();
         git(&["init", "-q"], &beta);
         git(&["remote", "add", "origin", "https://github.com/u/beta.git"], &beta);
+        // gamma：fork 形态（origin + upstream）——upstream 不登记为备份目标
+        let gamma = base.join("gamma");
+        std::fs::create_dir_all(&gamma).unwrap();
+        git(&["init", "-q"], &gamma);
+        git(&["remote", "add", "origin", "https://github.com/u/gamma.git"], &gamma);
+        git(&["remote", "add", "upstream", "https://github.com/orig/gamma.git"], &gamma);
         // 非 git 目录与隐藏目录应被跳过
         std::fs::create_dir_all(base.join("notrepo")).unwrap();
         std::fs::create_dir_all(base.join(".hid")).unwrap();
@@ -250,7 +261,7 @@ mod tests {
             out
         };
         let rows = list();
-        assert_eq!(rows.len(), 2, "only git repos registered: {rows:?}");
+        assert_eq!(rows.len(), 3, "only git repos registered: {rows:?}");
         assert_eq!(rows[0].0, "alpha");
         assert_eq!(rows[0].1, "https://github.com/u/alpha.git");
         assert_eq!(
@@ -259,10 +270,13 @@ mod tests {
         );
         assert_eq!(rows[1].0, "beta");
         assert!(rows[1].2.is_empty(), "beta has no backup remote yet");
+        assert_eq!(rows[2].0, "gamma");
+        assert_eq!(rows[2].1, "https://github.com/u/gamma.git");
+        assert!(rows[2].2.is_empty(), "upstream is not registered as target");
 
         // 幂等：再次发现不产生重复
         discover(&state, "test", crate::lang::Lang::Zh).unwrap();
-        assert_eq!(list().len(), 2);
+        assert_eq!(list().len(), 3);
 
         // beta 后来加了 backup 远端，再次发现应自动补为目标
         git(&["remote", "add", "backup", "https://gitlab.com/u/beta.git"], &beta);
@@ -276,6 +290,23 @@ mod tests {
         let rows = list();
         assert!(rows[1].2.is_empty());
 
+        // 旧数据迁移：历史版本登记为目标的 upstream 在下次发现时自动移除
+        {
+            let conn = lock(&state.conn);
+            let gid: String = conn
+                .query_row("SELECT id FROM repos WHERE name = 'gamma'", [], |r| r.get(0))
+                .unwrap();
+            conn.execute(
+                "INSERT INTO sync_targets (repo_id, remote, url)
+                 VALUES (?1, 'upstream', 'https://github.com/orig/gamma.git')",
+                params![gid],
+            )
+            .unwrap();
+        }
+        discover(&state, "test", crate::lang::Lang::Zh).unwrap();
+        let rows = list();
+        assert!(rows[2].2.is_empty(), "历史 upstream 目标应被自动移除");
+
         // 隐藏的仓库不再被登记：隐藏 alpha 后其目录仍在基地址内
         {
             let conn = lock(&state.conn);
@@ -283,8 +314,9 @@ mod tests {
         }
         discover(&state, "test", crate::lang::Lang::Zh).unwrap();
         let rows = list();
-        assert_eq!(rows.len(), 1);
+        assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].0, "beta");
+        assert_eq!(rows[1].0, "gamma");
 
         std::fs::remove_dir_all(&root).ok();
     }

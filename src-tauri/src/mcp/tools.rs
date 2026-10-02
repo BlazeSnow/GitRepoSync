@@ -259,6 +259,13 @@ pub(super) fn tools_call(
             if targets.is_empty() {
                 return Err((-32602, tr(lang, "sync-no-targets")));
             }
+            // upstream 为保留远端名（fork 上游，自动发现排除）：不得作为备份目标
+            if targets
+                .iter()
+                .any(|(remote, _)| remote == discover::RESERVED_TARGET_REMOTE)
+            {
+                return Err((-32602, tr(lang, "repo-target-reserved")));
+            }
             // 幂等：同名仓库已存在（含隐藏的）时更新源地址、合并目标并重新登记，
             // 不再创建重复条目——name 同时是中转目录名与自动发现的身份
             let existing: Option<String> = {
@@ -382,6 +389,12 @@ pub(super) fn tools_call(
             if let Some(ts) = &targets {
                 if ts.is_empty() {
                     return Err((-32602, tr(lang, "sync-no-targets")));
+                }
+                // upstream 为保留远端名（fork 上游，自动发现排除）：不得作为备份目标
+                if ts.iter()
+                    .any(|(remote, _)| remote == discover::RESERVED_TARGET_REMOTE)
+                {
+                    return Err((-32602, tr(lang, "repo-target-reserved")));
                 }
             }
             if name.is_none() && source.is_none() && targets.is_none() {
@@ -704,6 +717,13 @@ mod tests {
         assert_eq!(targets.len(), 1, "targets 提供即整体替换");
         assert_eq!(targets[0]["remote"], json!("c"));
         assert!(call(&state, "update_repo", json!({ "id": id, "targets": [] })).is_err());
+        // upstream 为保留远端名（fork 上游）：整体替换时拒绝
+        assert!(call(
+            &state,
+            "update_repo",
+            json!({ "id": id, "targets": [{ "remote": "upstream", "url": "https://orig/new.git" }] })
+        )
+        .is_err());
         assert!(call(&state, "update_repo", json!({ "id": id })).is_err());
         assert_eq!(
             call(&state, "update_repo", json!({ "id": "nope", "source": "s" }))
@@ -755,6 +775,14 @@ mod tests {
             call(&state, "add_repo", json!({ "name": "a", "source": "s" })).is_err(),
             "没有任何目标时拒绝"
         );
+        // upstream 为保留远端名（fork 上游）：拒绝作为备份目标
+        assert!(call(
+            &state,
+            "add_repo",
+            json!({ "name": "f", "source": "s",
+                    "targets": [{ "remote": "upstream", "url": "https://orig/f.git" }] })
+        )
+        .is_err());
         assert!(call(&state, "nope", json!({})).is_err(), "未知工具");
         // base_dir 往返：~ 输入展开为完整路径
         call(&state, "set_base_dir", json!({ "base_dir": "~/repo" })).unwrap();

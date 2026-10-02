@@ -19,6 +19,7 @@ log-change-password = Changed password
 # ---------- Repositories ----------
 repo-fields-empty = Repository name, source and target must not be empty
 repo-name-exists = Repository name "{$name}" already exists
+repo-target-reserved = "upstream" is a reserved remote name (fork upstream) and cannot be a backup target
 repo-not-found = Repository not found
 repo-syncing = This repository is syncing; stop it first
 log-repo-added = Added repository "{$name}"

@@ -25,6 +25,7 @@ import { ContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { RepoEditDialog } from "@/components/RepoEditDialog";
 import { DeleteRepoDialog } from "@/components/DeleteRepoDialog";
 import { IconEdit, IconFolder, IconPlus, IconRefresh, IconSquare, IconTrash } from "@/components/icons";
+import { useToast } from "@/components/Toast";
 import { cn } from "@/lib/utils";
 import { motion } from "motion/react";
 
@@ -158,6 +159,7 @@ const MotionRow = motion.create(TableRow);
 
 export function SyncPage({ token }: { token: string }) {
   const { t } = useTranslation();
+  const toast = useToast();
   const [repos, setRepos] = useState<Repo[]>([]);
   const [stale, setStaleState] = useState(loadStaleRange);
   // 范围选择写入 localStorage：切到日志等页面再回来时保持，不重置为全部
@@ -233,23 +235,22 @@ export function SyncPage({ token }: { token: string }) {
   );
 
   async function handleStartSync() {
-    setError("");
     if (staleIds.length === 0) return;
     try {
-      await api.startSync(token, staleIds);
+      const started = await api.startSync(token, staleIds);
+      toast({ kind: "info", title: t("toastSyncStarted", { count: started }) });
       void load();
     } catch (err) {
-      setError(String(err));
+      toast({ kind: "error", title: String(err) });
     }
   }
 
   async function handleStopSync() {
-    setError("");
     try {
       await api.stopSync(token, null);
       void load();
     } catch (err) {
-      setError(String(err));
+      toast({ kind: "error", title: String(err) });
     }
   }
 
@@ -266,14 +267,15 @@ export function SyncPage({ token }: { token: string }) {
 
   async function handleDelete() {
     if (!deleteTarget) return;
-    setError("");
+    const name = deleteTarget.name;
     try {
       await api.deleteRepo(token, deleteTarget.id);
       setDeleteTarget(null);
+      toast({ kind: "success", title: t("toastRepoDeleted", { name }) });
       void load();
     } catch (err) {
       setDeleteTarget(null);
-      setError(String(err));
+      toast({ kind: "error", title: String(err) });
     }
   }
 
@@ -297,7 +299,7 @@ export function SyncPage({ token }: { token: string }) {
           onSelect: () => {
             void api
               .openRepoDir(token, menu.repo.id)
-              .catch((err) => setError(String(err)));
+              .catch((err) => toast({ kind: "error", title: String(err) }));
           },
         },
         {
@@ -307,7 +309,7 @@ export function SyncPage({ token }: { token: string }) {
             void api
               .startSync(token, [menu.repo.id])
               .then(load)
-              .catch((err) => setError(String(err)));
+              .catch((err) => toast({ kind: "error", title: String(err) }));
           },
         },
         {
@@ -515,8 +517,12 @@ export function SyncPage({ token }: { token: string }) {
           token={token}
           repo={editor.repo}
           onClose={() => setEditor(null)}
-          onSaved={() => {
+          onSaved={(saved) => {
             setEditor(null);
+            toast({
+              kind: "success",
+              title: saved.id === editor.repo?.id ? t("toastRepoEdited", { name: saved.name }) : t("toastRepoAdded", { name: saved.name }),
+            });
             void load();
           }}
           onDelete={(r) => {

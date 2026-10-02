@@ -21,6 +21,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import { api } from "@/lib/api";
+import { ToastProvider } from "@/components/Toast";
 import { SyncPage, filterStale, sortRepos, toggleSort, type SortSpec } from "./SyncPage";
 
 // vitest 非 globals 模式下 testing-library 不自动卸载，需手动清理
@@ -114,13 +115,19 @@ it("全部配置齐全时「开始同步」可用，点击后按范围发起同�
   vi.mocked(api.listRepos).mockResolvedValue([]);
   vi.mocked(api.startSync).mockResolvedValue(1);
 
-  render(<SyncPage token="tok" />);
+  render(
+    <ToastProvider>
+      <SyncPage token="tok" />
+    </ToastProvider>,
+  );
   const button = await screen.findByRole("button", { name: "开始同步" });
   await waitFor(() => expect(button).toBeEnabled());
   fireEvent.click(button);
 
   await waitFor(() => expect(api.startSync).toHaveBeenCalled());
   expect(api.startSync).toHaveBeenCalledWith("tok", ["id-1"]);
+  // 开始同步的即时反馈（数量来自后端返回的实际启动数）
+  expect(await screen.findByText("已开始同步 1 个仓库")).toBeInTheDocument();
 });
 
 it("无同步运行时仅显示「开始同步」，停止按钮不出现", async () => {
@@ -451,7 +458,11 @@ it("编辑弹窗内删除仓库：右键编辑 → 删除仓库 → 确认后调
   vi.mocked(api.listRepos).mockResolvedValue([]);
   vi.mocked(api.deleteRepo).mockResolvedValue(undefined);
 
-  render(<SyncPage token="tok" />);
+  render(
+    <ToastProvider>
+      <SyncPage token="tok" />
+    </ToastProvider>,
+  );
 
   // 右键行打开菜单，进入编辑弹窗
   fireEvent.contextMenu(await screen.findByText("demo"));
@@ -463,6 +474,8 @@ it("编辑弹窗内删除仓库：右键编辑 → 删除仓库 → 确认后调
   fireEvent.click(screen.getByRole("button", { name: "删除" }));
 
   await waitFor(() => expect(api.deleteRepo).toHaveBeenCalledWith("tok", "id-1"));
+  // 删除成功的即时反馈
+  expect(await screen.findByText("已删除仓库「demo」")).toBeInTheDocument();
 });
 
 it("filterStale：all 显示全部；N 天范围仅保留已配置且超期或从未同步的仓库", () => {

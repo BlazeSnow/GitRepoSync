@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { useSyncToasts } from "@/lib/syncToasts";
 import type { PageKey } from "@/lib/types";
 import { applyTheme, getThemePref, watchSystemTheme } from "@/lib/theme";
 import { Layout } from "@/components/Layout";
@@ -14,6 +15,8 @@ const TOKEN_KEY = "grs_token";
 
 export default function App() {
   const { t } = useTranslation();
+  // 同步结果实时 toast（成功/失败含原因/停止），任意页面可见
+  useSyncToasts();
   const [token, setToken] = useState<string | null>(() => localStorage.getItem(TOKEN_KEY));
   const [username, setUsername] = useState("");
   const [checking, setChecking] = useState(() => !!localStorage.getItem(TOKEN_KEY));

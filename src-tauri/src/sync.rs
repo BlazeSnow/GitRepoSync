@@ -15,6 +15,8 @@ use tauri::{AppHandle, Emitter, State};
 #[serde(rename_all = "camelCase")]
 pub struct SyncEvent {
     pub id: String,
+    /// 仓库名：toast 等监听方无需反查即可展示
+    pub name: String,
     pub status: String,
     pub message: Option<String>,
     pub last_synced: Option<i64>,
@@ -309,6 +311,7 @@ fn run_sync(
         app,
         SyncEvent {
             id: repo_id.to_string(),
+            name: repo.name.clone(),
             status: "running".into(),
             message: None,
             last_synced: repo.last_synced,
@@ -348,6 +351,7 @@ fn run_sync(
             app,
             SyncEvent {
                 id: repo_id.to_string(),
+                name: repo.name.clone(),
                 status: "failed".into(),
                 message: Some(msg),
                 last_synced: repo.last_synced,
@@ -371,6 +375,7 @@ fn run_sync(
             app,
             SyncEvent {
                 id: repo_id.to_string(),
+                name: repo.name.clone(),
                 status: "failed".into(),
                 message: Some(msg),
                 last_synced: repo.last_synced,
@@ -405,6 +410,7 @@ fn run_sync(
         app,
         SyncEvent {
             id: repo_id.to_string(),
+            name: repo.name.clone(),
             status,
             message: Some(message),
             last_synced: if success { Some(now_ms()) } else { repo.last_synced },

@@ -253,7 +253,7 @@ it("切页（卸载）后重进保持同步范围选择，表格与计数随之�
   expect(screen.getByRole("button", { name: "开始同步（1 个）" })).toBeInTheDocument();
 });
 
-it("sortRepos：状态问题优先且未配置最后；时间从未同步最先；toggleSort 三态循环", () => {
+it("sortRepos：状态问题优先、未配置行平等参与排序；时间从未同步最先；toggleSort 三态循环", () => {
   const now = Date.now();
   const day = 86_400_000;
   const repos = [
@@ -264,17 +264,17 @@ it("sortRepos：状态问题优先且未配置最后；时间从未同步最先�
   ];
   const names = (rows: Repo[]) => rows.map((r) => r.name);
 
-  // 默认（null）保持名称序；名称升序与默认一致，降序反转
+  // d 为未配置仓库：与普通行平等参与排序，随方向反转，不特殊垫底
   const def: SortSpec = { key: null, dir: "asc" };
   expect(names(sortRepos(repos, def))).toEqual(["a", "b", "c", "d"]);
   expect(names(sortRepos(repos, { key: "name", dir: "asc" }))).toEqual(["a", "b", "c", "d"]);
-  expect(names(sortRepos(repos, { key: "name", dir: "desc" }))).toEqual(["c", "b", "a", "d"]);
-  // 状态升序：失败 > 未同步 > 成功，未配置最后；降序相反
+  expect(names(sortRepos(repos, { key: "name", dir: "desc" }))).toEqual(["d", "c", "b", "a"]);
+  // 状态升序：失败 > 未同步 > 成功；未配置行按自身状态参与，降序反转
   expect(names(sortRepos(repos, { key: "status", dir: "asc" }))).toEqual(["b", "a", "c", "d"]);
-  expect(names(sortRepos(repos, { key: "status", dir: "desc" }))).toEqual(["c", "a", "b", "d"]);
+  expect(names(sortRepos(repos, { key: "status", dir: "desc" }))).toEqual(["c", "d", "a", "b"]);
   // 时间升序：从未同步（null）最先，其后从旧到新；降序相反
   expect(names(sortRepos(repos, { key: "lastSynced", dir: "asc" }))).toEqual(["c", "b", "a", "d"]);
-  expect(names(sortRepos(repos, { key: "lastSynced", dir: "desc" }))).toEqual(["a", "b", "c", "d"]);
+  expect(names(sortRepos(repos, { key: "lastSynced", dir: "desc" }))).toEqual(["a", "d", "b", "c"]);
 
   // 三态循环：未排 → 升 → 降 → 恢复默认
   expect(toggleSort(def, "status")).toEqual({ key: "status", dir: "asc" });

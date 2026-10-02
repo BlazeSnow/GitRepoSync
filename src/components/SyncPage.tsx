@@ -87,16 +87,15 @@ const STATUS_RANK: Record<string, number> = {
  * - 名称：与后端默认一致的字符串序（升序与默认相同），降序反转；
  * - 状态：升序按问题优先（失败 > 同步中 > 已停止 > 未同步 > 成功），降序反转；
  * - 上次同步：升序「从未同步」最先、其后按时间从旧到新，降序相反；
- * - 未配置仓库不参与方向反转，固定排在最后；
+ * - 未配置仓库与普通行平等参与排序并随方向反转，不特殊垫底
+ *   （升序与默认视图的名称序一致，行不会因点击表头跳动）；
  * - 同分时保持后端的名称顺序（Array.prototype.sort 稳定）
  */
 export function sortRepos(repos: Repo[], sort: SortSpec): Repo[] {
   if (sort.key === null) return repos;
   const sign = sort.dir === "asc" ? 1 : -1;
-  const configured: Repo[] = [];
-  const unconfiguredRows: Repo[] = [];
-  for (const r of repos) (isUnconfigured(r) ? unconfiguredRows : configured).push(r);
-  configured.sort((a, b) => {
+  // 拷贝后排序：stale === "all" 时入参就是 state 数组本体，不得原地修改
+  return [...repos].sort((a, b) => {
     let cmp: number;
     if (sort.key === "name") {
       // 与 SQLite ORDER BY name（UTF-8 字节序）保持一致的字符串比较
@@ -112,7 +111,6 @@ export function sortRepos(repos: Repo[], sort: SortSpec): Repo[] {
     }
     return cmp * sign;
   });
-  return [...configured, ...unconfiguredRows];
 }
 
 /** 表头点击的三态切换：未排 → 升序 → 降序 → 恢复默认名称序 */

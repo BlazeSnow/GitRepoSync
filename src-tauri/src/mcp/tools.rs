@@ -249,6 +249,7 @@ pub(super) fn tools_call(
                 return Err((-32602, tr(lang, "repo-fields-empty")));
             }
             crate::repos::validate_repo_name(&rname, lang).map_err(|e| (-32602, e))?;
+            crate::repos::validate_url(&source, lang).map_err(|e| (-32602, e))?;
             // 目标：优先 targets 数组 [{remote,url}]；兼容单 target 字符串（远端名 backup）
             let mut targets: Vec<(String, String)> = args
                 .get("targets")
@@ -280,6 +281,13 @@ pub(super) fn tools_call(
                 .any(|(remote, _)| remote == discover::RESERVED_TARGET_REMOTE)
             {
                 return Err((-32602, tr(lang, "repo-target-reserved")));
+            }
+            // 目标 URL 校验：拒绝选项注入与「自己推自己」
+            for (_, url) in &targets {
+                crate::repos::validate_url(url, lang).map_err(|e| (-32602, e))?;
+                if url == &source {
+                    return Err((-32602, tr(lang, "repo-url-same-as-source")));
+                }
             }
             // 幂等：同名仓库已存在（含隐藏的）时更新源地址、合并目标并重新登记，
             // 不再创建重复条目——name 同时是中转目录名与自动发现的身份
@@ -393,6 +401,9 @@ pub(super) fn tools_call(
             if let Some(n) = &name {
                 crate::repos::validate_repo_name(n, lang).map_err(|e| (-32602, e))?;
             }
+            if let Some(s) = &source {
+                crate::repos::validate_url(s, lang).map_err(|e| (-32602, e))?;
+            }
             // targets 提供即整体替换（与界面编辑一致）；仅补充目标请用 add_repo（合并语义）
             let targets: Option<Vec<(String, String)>> = args
                 .get("targets")
@@ -416,17 +427,29 @@ pub(super) fn tools_call(
                 {
                     return Err((-32602, tr(lang, "repo-target-reserved")));
                 }
+                for (_, url) in ts {
+                    crate::repos::validate_url(url, lang).map_err(|e| (-32602, e))?;
+                }
             }
             if name.is_none() && source.is_none() && targets.is_none() {
                 return Err((-32602, tr(lang, "update-repo-no-fields")));
             }
             let log_name = {
                 let conn = lock(&state.conn);
-                let current_name: String = conn
-                    .query_row("SELECT name FROM repos WHERE id = ?1", params![id], |r| {
-                        r.get(0)
+                let (current_name, current_source): (String, String) = conn
+                    .query_row("SELECT name, source FROM repos WHERE id = ?1", params![id], |r| {
+                        Ok((r.get(0)?, r.get(1)?))
                     })
                     .map_err(|_| (-32602, tr(lang, "repo-not-found")))?;
+                // 目标等于生效源地址（新传的或既有的）＝自己推自己，拒绝
+                let effective_source = source.clone().unwrap_or(current_source);
+                if let Some(ts) = &targets {
+                    for (_, u) in ts {
+                        if u == &effective_source {
+                            return Err((-32602, tr(lang, "repo-url-same-as-source")));
+                        }
+                    }
+                }
                 // 改名禁止与现有名称冲突（name 唯一，且是自动发现的身份）
                 if let Some(n) = &name {
                     let dup: i64 = conn
@@ -961,6 +984,68 @@ mod tests {
         assert!(
             call(&state, "update_repo", json!({ "id": id, "name": "../evil" })).is_err(),
             "update_repo 应拒绝非法改名"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// add_repo / update_repo 拒绝非法 URL：以 - 开头（git 选项注入）与
+    /// 目标等于源地址（update 未传 source 时按既有源校验）
+    #[test]
+    fn mcp_rejects_invalid_urls() {
+        let (state, root) = open_state();
+        // 源地址以 - 开头
+        assert!(call(
+            &state,
+            "add_repo",
+            json!({
+                "name": "a", "source": "-https://x",
+                "targets": [{ "remote": "backup", "url": "https://bak/a.git" }]
+            }),
+        )
+        .is_err());
+        // 目标以 - 开头
+        assert!(call(
+            &state,
+            "add_repo",
+            json!({
+                "name": "a", "source": "https://src/a.git",
+                "targets": [{ "remote": "backup", "url": "-x" }]
+            }),
+        )
+        .is_err());
+        // 目标等于源（自己推自己）
+        assert!(call(
+            &state,
+            "add_repo",
+            json!({
+                "name": "a", "source": "https://src/a.git",
+                "targets": [{ "remote": "backup", "url": "https://src/a.git" }]
+            }),
+        )
+        .is_err());
+        // update_repo：源与目标校验（未传 source 时按既有源校验）
+        let added = call(
+            &state,
+            "add_repo",
+            json!({
+                "name": "demo", "source": "https://src/demo.git",
+                "targets": [{ "remote": "backup", "url": "https://bak/demo.git" }]
+            }),
+        )
+        .unwrap();
+        let id = added["id"].as_str().unwrap();
+        assert!(call(&state, "update_repo", json!({ "id": id, "source": "-x" })).is_err());
+        assert!(
+            call(
+                &state,
+                "update_repo",
+                json!({
+                    "id": id,
+                    "targets": [{ "remote": "backup", "url": "https://src/demo.git" }]
+                }),
+            )
+            .is_err(),
+            "目标等于既有源地址应拒绝"
         );
         std::fs::remove_dir_all(&root).ok();
     }

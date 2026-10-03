@@ -44,6 +44,15 @@ pub(crate) fn validate_repo_name(name: &str, lang: Lang) -> Result<(), String> {
     Ok(())
 }
 
+/// URL 合法性：拒绝以 - 开头（会被 git 解析为命令行选项而非位置参数，
+/// 造成选项注入与难排查的失败）
+pub(crate) fn validate_url(url: &str, lang: Lang) -> Result<(), String> {
+    if url.starts_with('-') {
+        return Err(tr(lang, "repo-url-invalid"));
+    }
+    Ok(())
+}
+
 /// save_repo 的单个备份目标输入
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -69,6 +78,7 @@ pub fn save_repo(
         return Err(tr(lang, "repo-fields-empty"));
     }
     validate_repo_name(&name, lang)?;
+    validate_url(&source, lang)?;
     // 名称唯一：name 是中转目录名与自动发现的身份（数据库层有唯一索引兜底），
     // 此处先给出可读提示（含隐藏行，改名不得与任何现有行冲突）
     {
@@ -101,6 +111,13 @@ pub fn save_repo(
         })
         .filter(|t| !t.remote.is_empty() && !t.url.is_empty())
         .collect();
+    // 目标 URL 校验：拒绝选项注入与「自己推自己」
+    for t in &targets {
+        validate_url(&t.url, lang)?;
+        if t.url == source {
+            return Err(tr(lang, "repo-url-same-as-source"));
+        }
+    }
     // upstream 为保留远端名（fork 上游，自动发现排除）：不得作为备份目标，
     // 否则会在下次发现时被静默移除
     if targets
@@ -315,6 +332,60 @@ mod tests {
             "normal-name".into(),
             "https://src/x.git".into(),
             vec![TargetInput { remote: "backup".into(), url: "https://bak/x.git".into() }],
+        )
+        .is_ok());
+        drop(st);
+        drop(app);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// save_repo 拒绝非法 URL：以 - 开头（git 选项注入）与目标等于源
+    /// 地址（自己推自己）
+    #[test]
+    fn save_repo_rejects_invalid_urls() {
+        use tauri::Manager;
+
+        let (app, state, root) = open_mock_app("badurl");
+        let st = app.state::<Arc<AppState>>();
+        insert_session(state.as_ref(), "tok");
+        // 源地址以 - 开头
+        assert!(save_repo(
+            st.clone(),
+            "tok".into(),
+            None,
+            "demo".into(),
+            "-https://x".into(),
+            vec![TargetInput { remote: "backup".into(), url: "https://bak/demo.git".into() }],
+        )
+        .is_err());
+        // 目标以 - 开头
+        assert!(save_repo(
+            st.clone(),
+            "tok".into(),
+            None,
+            "demo".into(),
+            "https://src/demo.git".into(),
+            vec![TargetInput { remote: "backup".into(), url: "-x".into() }],
+        )
+        .is_err());
+        // 目标等于源（自己推自己）
+        assert!(save_repo(
+            st.clone(),
+            "tok".into(),
+            None,
+            "demo".into(),
+            "https://src/demo.git".into(),
+            vec![TargetInput { remote: "backup".into(), url: "https://src/demo.git".into() }],
+        )
+        .is_err());
+        // 合法 URL 正常通过
+        assert!(save_repo(
+            st.clone(),
+            "tok".into(),
+            None,
+            "demo".into(),
+            "https://src/demo.git".into(),
+            vec![TargetInput { remote: "backup".into(), url: "https://bak/demo.git".into() }],
         )
         .is_ok());
         drop(st);

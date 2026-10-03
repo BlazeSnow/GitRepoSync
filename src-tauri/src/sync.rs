@@ -71,6 +71,9 @@ pub fn stop_sync(
     }
     for rid in &ids {
         lock(&state.syncing).remove(rid);
+        // 占用锁先行释放（与 syncing 的既有语义一致：停止后立即让位）；
+        // 运行中任务的锁随后由 worker 收尾重复移除（幂等）
+        lock(&state.sync_claims).remove(rid);
     }
 
     // 运行中的任务终止其 git 子进程
@@ -177,6 +180,12 @@ pub fn spawn_sync(
         if syncing.contains(&repo_id) {
             return false;
         }
+        // 跨进程互斥：GUI 与 MCP 为两个进程（内存 syncing 互不可见），
+        // 文件锁被任一方持有时拒绝启动，避免同仓库双流水线并发
+        let Some(claim) = state.try_claim_sync(&repo_id) else {
+            return false;
+        };
+        lock(&state.sync_claims).insert(repo_id.clone(), claim);
         syncing.insert(repo_id.clone());
     }
     lock(&state.stop_requested).remove(&repo_id);
@@ -210,6 +219,8 @@ fn sync_worker(state: &Arc<AppState>, app: Option<AppHandle>) {
                 run_sync(state, &app, &job.repo_id, &job.operator, job.lang);
                 lock(&state.syncing).remove(&job.repo_id);
                 lock(&state.stop_requested).remove(&job.repo_id);
+                // 释放跨进程同步占用锁
+                lock(&state.sync_claims).remove(&job.repo_id);
             }
             None => {
                 // 队列已空；与入队方竞态时双重检查，避免漏掉新任务
@@ -571,6 +582,17 @@ mod tests {
                 params![repo_dir.join("b.git").to_string_lossy()],
             )
             .unwrap();
+            // r2 仅入库为已配置（无本地目录）：worker 忙于 r1 时排队持有占用锁
+            conn.execute(
+                "INSERT INTO repos (id, name, source) VALUES ('r2', 'r2', 'https://src/r2.git')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO sync_targets (repo_id, remote, url) VALUES ('r2', 'backup', 'https://bak/r2.git')",
+                [],
+            )
+            .unwrap();
         }
         // 源目录准备成 git 仓库并写入一个挂起的 hook：git 命令会卡在 hook 上
         let git = |args: &[&str]| {
@@ -609,6 +631,10 @@ mod tests {
         let dup = spawn_sync(state.clone(), None, "r1".into(), "test".into(), crate::lang::Lang::Zh);
         assert!(!dup, "同步中的仓库不应重复入队");
 
+        // r2 排队（worker 正忙于 r1）：排队任务同样持有跨进程占用锁
+        let queued = spawn_sync(state.clone(), None, "r2".into(), "test".into(), crate::lang::Lang::Zh);
+        assert!(queued);
+
         // 等 worker 启动 git 子进程（轮询 sync_procs 出现）；并行测试下 CPU 紧张，
         // 出现后再等一个轮询周期，确保 git 已进入被轮询等待的运行态
         let mut waited = 0;
@@ -638,8 +664,45 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
         assert_eq!(status, "stopped", "停止后仓库状态应为 stopped");
+        // 停止后跨进程占用锁已释放（排队出队即释放、运行中由收尾释放）
+        assert!(state.try_claim_sync("r1").is_some(), "r1 占用锁应已释放");
+        assert!(state.try_claim_sync("r2").is_some(), "r2 占用锁应已释放");
         drop(st);
         drop(app);
+        drop(state);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 跨进程互斥：文件锁被他方持有（同进程双句柄同样冲突——Windows 为
+    /// 逐句柄 LockFileEx、Unix 为逐 ofd 的 flock）时 spawn_sync 拒绝启动
+    /// 且不产生任务；锁释放后可再次获取
+    #[test]
+    fn spawn_sync_rejected_while_claimed_elsewhere() {
+        let root = std::env::temp_dir().join(format!("grs-claim-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&root).unwrap();
+        let state = Arc::new(AppState::open(root.join("app.db")).unwrap());
+        {
+            let conn = lock(&state.conn);
+            conn.execute(
+                "INSERT INTO repos (id, name, source) VALUES ('r1', 'r1', 'https://src/r1.git')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO sync_targets (repo_id, remote, url) VALUES ('r1', 'backup', 'https://bak/r1.git')",
+                [],
+            )
+            .unwrap();
+        }
+        // 模拟另一进程持锁（同进程第二个句柄同样拿不到独占锁）
+        let claim = state.try_claim_sync("r1").unwrap();
+        let started = spawn_sync(state.clone(), None, "r1".into(), "test".into(), crate::lang::Lang::Zh);
+        assert!(!started, "他方持锁时不应启动同步");
+        assert!(lock(&state.syncing).is_empty(), "不应产生同步任务");
+        assert!(lock(&state.sync_queue).jobs.is_empty());
+        drop(claim);
+        // 释放后锁可重新获取（真实启动会拉起 git 子进程，此处仅验证锁回收）
+        assert!(state.try_claim_sync("r1").is_some());
         drop(state);
         std::fs::remove_dir_all(&root).ok();
     }

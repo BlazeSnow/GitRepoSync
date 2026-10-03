@@ -1,5 +1,6 @@
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use fs2::FileExt;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -64,6 +65,13 @@ pub struct SyncJob {
     pub lang: Lang,
 }
 
+/// 跨进程同步占用锁的句柄：持有文件句柄即持有
+/// {数据目录}/sync-locks/{repo_id}.lock 的独占文件锁，
+/// Drop（关闭句柄）时由操作系统释放——进程崩溃不留死锁
+pub struct SyncClaim {
+    _file: std::fs::File,
+}
+
 #[derive(Default)]
 pub struct SyncQueue {
     pub jobs: VecDeque<SyncJob>,
@@ -76,6 +84,10 @@ pub struct AppState {
     pub syncing: Mutex<HashSet<String>>,
     pub stop_requested: Mutex<HashSet<String>>,
     pub sync_queue: Mutex<SyncQueue>,
+    /// 跨进程同步占用（GUI 与 MCP 互斥）：repo_id -> 文件锁句柄
+    pub sync_claims: Mutex<HashMap<String, SyncClaim>>,
+    /// 占用锁文件目录（与 app.db 同目录的 sync-locks/，两个进程一致）
+    sync_locks_dir: PathBuf,
 }
 
 /// 默认基地址：本机用户目录下的 repo 目录（完整路径）
@@ -122,9 +134,33 @@ impl AppState {
             syncing: Mutex::new(HashSet::new()),
             stop_requested: Mutex::new(HashSet::new()),
             sync_queue: Mutex::new(SyncQueue::default()),
+            sync_claims: Mutex::new(HashMap::new()),
+            sync_locks_dir: db_path
+                .parent()
+                .map(|p| p.join("sync-locks"))
+                .unwrap_or_else(|| PathBuf::from("sync-locks")),
         };
         state.seed();
         Ok(state)
+    }
+
+    /// 尝试获取仓库的跨进程同步占用锁；已被任何进程占用（含本进程其他句柄）
+    /// 返回 None。GUI 与 MCP 为两个进程、内存中的 syncing 互不可见，
+    /// 以此实现「一方同步时另一方不得启动同一仓库的同步」；
+    /// Windows 为逐句柄 LockFileEx、Unix 为逐 ofd 的 flock，同进程
+    /// 多句柄同样互斥，进程崩溃由操作系统自动释放。
+    pub fn try_claim_sync(&self, repo_id: &str) -> Option<SyncClaim> {
+        let dir = &self.sync_locks_dir;
+        std::fs::create_dir_all(dir).ok()?;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(dir.join(format!("sync-{repo_id}.lock")))
+            .ok()?;
+        file.try_lock_exclusive().ok()?;
+        Some(SyncClaim { _file: file })
     }
 
     fn ensure_schema(conn: &Connection) {

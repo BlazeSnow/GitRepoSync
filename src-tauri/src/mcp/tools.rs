@@ -248,6 +248,7 @@ pub(super) fn tools_call(
             if rname.is_empty() || source.is_empty() {
                 return Err((-32602, tr(lang, "repo-fields-empty")));
             }
+            crate::repos::validate_repo_name(&rname, lang).map_err(|e| (-32602, e))?;
             // 目标：优先 targets 数组 [{remote,url}]；兼容单 target 字符串（远端名 backup）
             let mut targets: Vec<(String, String)> = args
                 .get("targets")
@@ -389,6 +390,9 @@ pub(super) fn tools_call(
             };
             let name = optional_field("name");
             let source = optional_field("source");
+            if let Some(n) = &name {
+                crate::repos::validate_repo_name(n, lang).map_err(|e| (-32602, e))?;
+            }
             // targets 提供即整体替换（与界面编辑一致）；仅补充目标请用 add_repo（合并语义）
             let targets: Option<Vec<(String, String)>> = args
                 .get("targets")
@@ -922,6 +926,42 @@ mod tests {
                 .unwrap()
         };
         assert_eq!(jobs, 0, "未产生真实同步任务");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// add_repo / update_repo 拒绝非法仓库名（路径分隔符、盘符冒号、. 与 ..）
+    #[test]
+    fn mcp_rejects_invalid_repo_names() {
+        let (state, root) = open_state();
+        for bad in ["../evil", "a/b", "a\\b", "C:evil", ".", ".."] {
+            assert!(
+                call(
+                    &state,
+                    "add_repo",
+                    json!({
+                        "name": bad, "source": "https://src/x.git",
+                        "targets": [{ "remote": "backup", "url": "https://bak/x.git" }]
+                    }),
+                )
+                .is_err(),
+                "add_repo 应拒绝非法仓库名 {bad}"
+            );
+        }
+        // update_repo 改名同样拒绝
+        let added = call(
+            &state,
+            "add_repo",
+            json!({
+                "name": "demo", "source": "https://src/demo.git",
+                "targets": [{ "remote": "backup", "url": "https://bak/demo.git" }]
+            }),
+        )
+        .unwrap();
+        let id = added["id"].as_str().unwrap();
+        assert!(
+            call(&state, "update_repo", json!({ "id": id, "name": "../evil" })).is_err(),
+            "update_repo 应拒绝非法改名"
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 

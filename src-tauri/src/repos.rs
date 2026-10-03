@@ -29,6 +29,21 @@ pub fn list_repos(state: State<'_, Arc<AppState>>, token: String) -> Result<Vec<
     Ok(repos)
 }
 
+/// 仓库名合法性：name 同时是中转目录名（{基地址}/{name}）与自动发现的
+/// 身份——拒绝路径分隔符与盘符冒号（Windows 下 `C:xxx` 会被路径 join
+/// 语义带偏，防中转目录逃逸基地址），以及 . 与 ..
+pub(crate) fn validate_repo_name(name: &str, lang: Lang) -> Result<(), String> {
+    if name.contains('/')
+        || name.contains('\\')
+        || name.contains(':')
+        || name == "."
+        || name == ".."
+    {
+        return Err(tr(lang, "repo-name-invalid"));
+    }
+    Ok(())
+}
+
 /// save_repo 的单个备份目标输入
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -53,6 +68,7 @@ pub fn save_repo(
     if name.is_empty() || source.is_empty() {
         return Err(tr(lang, "repo-fields-empty"));
     }
+    validate_repo_name(&name, lang)?;
     // 名称唯一：name 是中转目录名与自动发现的身份（数据库层有唯一索引兜底），
     // 此处先给出可读提示（含隐藏行，改名不得与任何现有行冲突）
     {
@@ -267,6 +283,43 @@ mod tests {
         let d = crate::state::default_base_dir();
         assert!(d.ends_with("repo"));
         assert!(!d.starts_with('~'));
+    }
+
+    /// save_repo 拒绝非法仓库名（路径分隔符、盘符冒号、. 与 ..）——
+    /// 防止中转目录逃逸基地址；合法名不受影响
+    #[test]
+    fn save_repo_rejects_invalid_names() {
+        use tauri::Manager;
+
+        let (app, state, root) = open_mock_app("badname");
+        let st = app.state::<Arc<AppState>>();
+        insert_session(state.as_ref(), "tok");
+        for bad in ["../evil", "a/b", "a\\b", "C:evil", ".", ".."] {
+            assert!(
+                save_repo(
+                    st.clone(),
+                    "tok".into(),
+                    None,
+                    bad.into(),
+                    "https://src/x.git".into(),
+                    vec![TargetInput { remote: "backup".into(), url: "https://bak/x.git".into() }],
+                )
+                .is_err(),
+                "应拒绝非法仓库名 {bad}"
+            );
+        }
+        assert!(save_repo(
+            st.clone(),
+            "tok".into(),
+            None,
+            "normal-name".into(),
+            "https://src/x.git".into(),
+            vec![TargetInput { remote: "backup".into(), url: "https://bak/x.git".into() }],
+        )
+        .is_ok());
+        drop(st);
+        drop(app);
+        std::fs::remove_dir_all(&root).ok();
     }
 
     /// save_repo 将目标镜像进本地 config（存在的中转目录）：

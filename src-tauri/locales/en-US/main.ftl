@@ -19,6 +19,7 @@ log-change-password = Changed password
 # ---------- Repositories ----------
 repo-fields-empty = Repository name, source and target must not be empty
 repo-name-exists = Repository name "{$name}" already exists
+repo-name-invalid = Repository name must not contain path separators (/ or \\) or colons, and must not be . or ..
 repo-target-reserved = "upstream" is a reserved remote name (fork upstream) and cannot be a backup target
 repo-not-found = Repository not found
 repo-dir-not-exist = Local directory does not exist (not cloned yet?): {$dir}

@@ -95,6 +95,23 @@ it("修改密码表单具备密码管理器语义：form 提交与 autocomplete 
   );
 });
 
+it("语言卡片：下拉切换 English 后界面文案切换，可切回中文", async () => {
+  render(<SettingsPage token="tok" username="admin" />);
+  // jsdom 下 Radix trigger 的指针类型初始为 touch：click 即打开下拉
+  fireEvent.click(await screen.findByRole("combobox", { name: "语言 / Language" }));
+  fireEvent.click(await screen.findByRole("option", { name: "English" }));
+  // 界面文案随语言切换（外观卡片触发器的 aria-label 翻译）
+  await waitFor(() =>
+    expect(screen.getByRole("combobox", { name: "Appearance" })).toBeInTheDocument(),
+  );
+  // 切回中文
+  fireEvent.click(screen.getByRole("combobox", { name: "语言 / Language" }));
+  fireEvent.click(await screen.findByRole("option", { name: "中文" }));
+  await waitFor(() =>
+    expect(screen.getByRole("combobox", { name: "外观" })).toBeInTheDocument(),
+  );
+});
+
 it("外观卡片：下拉选择深色立即应用 .dark 并持久化，浅色恢复", async () => {
   render(<SettingsPage token="tok" username="admin" />);
   // jsdom 下 Radix trigger 的指针类型初始为 touch：click 即打开下拉；

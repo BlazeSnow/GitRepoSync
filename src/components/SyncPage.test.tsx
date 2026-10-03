@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import type { Repo } from "@/lib/types";
@@ -149,6 +149,8 @@ it("无同步运行时仅显示「开始同步」，停止按钮不出现", asyn
   expect(await screen.findByText("从未")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "开始同步" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "停止同步" })).not.toBeInTheDocument();
+  // 只读化：不再提供「添加仓库」入口（发现即登记）
+  expect(screen.queryByRole("button", { name: "添加仓库" })).not.toBeInTheDocument();
 });
 
 it("有仓库同步中时仅显示「停止同步」，点击终止全部同步", async () => {
@@ -398,6 +400,25 @@ it("点击状态/时间表头切换排序：升 → 降 → 恢复默认名称�
   fireEvent.click(screen.getByRole("columnheader", { name: /仓库/ }));
   expect(names()).toEqual(["alpha", "beta", "gamma"]);
   expect(screen.getByRole("columnheader", { name: /仓库/ })).not.toHaveTextContent("↑");
+});
+
+it("双击表格行打开只读详情弹窗，关闭后消失", async () => {
+  vi.mocked(api.discoverRepos).mockResolvedValue([
+    repo({ id: "a", name: "alpha", targets: [backupTarget] }),
+  ]);
+  vi.mocked(api.listRepos).mockResolvedValue([]);
+
+  render(<SyncPage token="tok" />);
+  fireEvent.doubleClick(await screen.findByText("alpha"));
+
+  const dialog = screen.getByRole("dialog");
+  // 详情弹窗只读：展示源与目标，无输入框
+  expect(within(dialog).getByText("https://github.com/u/demo.git")).toBeInTheDocument();
+  expect(within(dialog).getByText("https://gitlab.com/u/x.git")).toBeInTheDocument();
+  expect(within(dialog).queryByRole("textbox")).not.toBeInTheDocument();
+  // 关闭后弹窗消失
+  fireEvent.click(within(dialog).getByRole("button", { name: "关闭" }));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 });
 
 it("行悬停提示为结构化摘要：整体状态时间 + 各目标详情，而非统一的步骤汇总", async () => {

@@ -489,6 +489,99 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    /// sync_repo 端到端：经由工具层投递任务、执行者消费执行真实流水线，
+    /// 目标 bare 仓库推进到源 HEAD，操作人以 mcp 记录
+    #[test]
+    fn mcp_sync_repo_executes_end_to_end() {
+        use std::time::{Duration, Instant};
+
+        let (state, root) = open_state();
+        let base = root.join("base");
+        let source = root.join("src");
+        let target = root.join("target.git");
+        let git = |args: &[&str], cwd: &std::path::Path| {
+            let s = std::process::Command::new("git")
+                .args(args)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .current_dir(cwd)
+                .status()
+                .unwrap();
+            assert!(s.success(), "git {:?} 执行失败", args);
+        };
+        std::fs::create_dir_all(&source).unwrap();
+        git(&["init", "-q", "-b", "main"], &source);
+        git(&["config", "user.name", "t"], &source);
+        git(&["config", "user.email", "t@t"], &source);
+        std::fs::write(source.join("a.txt"), "v1").unwrap();
+        git(&["add", "."], &source);
+        git(&["commit", "-q", "-m", "v1"], &source);
+        git(&["init", "-q", "--bare", target.to_str().unwrap()], &root);
+
+        state.set_setting("base_dir", &base.to_string_lossy());
+        {
+            let conn = lock(&state.conn);
+            conn.execute(
+                "INSERT INTO repos (id, name, source) VALUES ('r1', 'demo', ?1)",
+                params![source.to_string_lossy()],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO sync_targets (repo_id, remote, url) VALUES ('r1', 'backup', ?1)",
+                params![target.to_string_lossy()],
+            )
+            .unwrap();
+        }
+
+        let r = call(&state, "sync_repo", json!({ "id": "r1" })).unwrap();
+        assert_eq!(r["started"], json!(true), "已配置仓库应成功投递");
+
+        // 轮询：任务被消费、状态成功
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            let (jobs, status): (i64, String) = {
+                let conn = lock(&state.conn);
+                let jobs: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM sync_jobs", [], |r| r.get(0))
+                    .unwrap_or(-1);
+                let status: String = conn
+                    .query_row("SELECT last_status FROM repos WHERE id = 'r1'", [], |r| r.get(0))
+                    .unwrap_or_default();
+                (jobs, status)
+            };
+            if jobs == 0 && status == "success" {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "任务未被消费或未成功: jobs={jobs} status={status}"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        // 目标推进到源 HEAD
+        let rev = |cwd: &std::path::Path, spec: &str| {
+            let out = std::process::Command::new("git")
+                .args(["rev-parse", spec])
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .current_dir(cwd)
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        assert_eq!(rev(&target, "refs/heads/main"), rev(&source, "HEAD"));
+        // 操作人以 mcp 记录（触发与同步结果）
+        let rows: i64 = {
+            let conn = lock(&state.conn);
+            conn.query_row(
+                "SELECT COUNT(*) FROM operation_logs WHERE operator = 'mcp'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert!(rows >= 2, "触发与同步结果应以 mcp 为操作人入库: rows={rows}");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     /// discover_repos：扫描基地址登记新仓库并返回列表，重复调用幂等
     #[test]
     fn discover_repos_scans_base_dir() {

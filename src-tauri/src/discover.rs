@@ -321,6 +321,59 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    /// 仓库配置只读：已登记仓库的 source 恒与 config 的 origin 对齐——
+    /// 手动改过的值被对齐回来；config 移除 origin 时 source 置空（仓库
+    /// 转为「未配置」）
+    #[test]
+    fn discover_aligns_source_with_origin() {
+        let root = std::env::temp_dir().join(format!("grs-align-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&root).unwrap();
+        let base = root.join("base");
+        let demo = base.join("demo");
+        std::fs::create_dir_all(&demo).unwrap();
+        let git = |args: &[&str]| {
+            let s = std::process::Command::new("git")
+                .args(args)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .current_dir(&demo)
+                .status()
+                .unwrap();
+            assert!(s.success(), "git {:?} 失败", args);
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["remote", "add", "origin", "https://github.com/u/demo.git"]);
+
+        let state = AppState::open(root.join("app.db")).unwrap();
+        state.set_setting("base_dir", &base.to_string_lossy());
+        discover(&state, "test", crate::lang::Lang::Zh).unwrap();
+
+        let source = || -> String {
+            let conn = lock(&state.conn);
+            conn.query_row("SELECT source FROM repos WHERE name = 'demo'", [], |r| r.get(0))
+                .unwrap_or_default()
+        };
+        assert_eq!(source(), "https://github.com/u/demo.git", "登记时 source = origin");
+
+        // 手动改过的 source 在下次发现时被对齐回 origin（配置只读）
+        {
+            let conn = lock(&state.conn);
+            conn.execute(
+                "UPDATE repos SET source = 'https://manual/demo.git' WHERE name = 'demo'",
+                [],
+            )
+            .unwrap();
+        }
+        discover(&state, "test", crate::lang::Lang::Zh).unwrap();
+        assert_eq!(source(), "https://github.com/u/demo.git", "source 应被对齐回 origin");
+
+        // config 移除 origin：source 置空，仓库转为「未配置」
+        git(&["remote", "remove", "origin"]);
+        discover(&state, "test", crate::lang::Lang::Zh).unwrap();
+        assert_eq!(source(), "", "config 移除 origin 后 source 应置空");
+        drop(state);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     /// 解析 .git/config 的远端表：多远端按出现顺序返回
     #[test]
     fn parse_remote_urls_reads_git_config() {

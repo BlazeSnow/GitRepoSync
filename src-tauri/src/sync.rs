@@ -1051,6 +1051,103 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    /// start_sync 命令层：会话校验、未配置仓库跳过、返回实际投递数；
+    /// 任务被消费后仓库状态落为 failed（源指向缺失的本地路径，克隆立即
+    /// 失败且不触网）
+    #[test]
+    fn start_sync_command_counts_and_guards() {
+        use crate::state::testutil::{insert_session, open_mock_app};
+        use tauri::Manager;
+
+        let (app, state, root) = open_mock_app("startcmd");
+        let st = app.state::<Arc<AppState>>();
+        insert_session(state.as_ref(), "tok");
+        let base = root.join("base");
+        state.set_setting("base_dir", &base.to_string_lossy());
+        {
+            let conn = lock(&state.conn);
+            // r1 已配置（源指向缺失的本地路径）；r2 未配置（缺源地址）
+            conn.execute(
+                "INSERT INTO repos (id, name, source) VALUES ('r1', 'r1', ?1)",
+                params![root.join("no-such-repo").to_string_lossy()],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO sync_targets (repo_id, remote, url) VALUES ('r1', 'backup', 'https://bak/r1.git')",
+                [],
+            )
+            .unwrap();
+            conn.execute("INSERT INTO repos (id, name, source) VALUES ('r2', 'r2', '')", [])
+                .unwrap();
+        }
+        // 无效令牌拒绝
+        assert!(start_sync(st.clone(), "bad".into(), vec!["r1".into()]).is_err());
+        // 返回实际投递数：未配置的 r2 跳过
+        let n = start_sync(
+            st.clone(),
+            "tok".into(),
+            vec!["r1".into(), "r2".into()],
+        )
+        .unwrap();
+        assert_eq!(n, 1, "只有已配置的 r1 投递");
+
+        // 轮询：任务被消费、克隆失败落为 failed
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let (jobs, status): (i64, String) = {
+                let conn = lock(&state.conn);
+                let jobs: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM sync_jobs", [], |r| r.get(0))
+                    .unwrap_or(-1);
+                let status: String = conn
+                    .query_row("SELECT last_status FROM repos WHERE id = 'r1'", [], |r| r.get(0))
+                    .unwrap_or_default();
+                (jobs, status)
+            };
+            if jobs == 0 && status == "failed" {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "任务未被消费: jobs={jobs} status={status}"
+            );
+            thread::sleep(Duration::from_millis(100));
+        }
+        drop(st);
+        drop(app);
+        drop(state);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// wait_syncs_idle：客户端进程立即返回（即使表中残留 running 行，
+    /// 那是执行者的事）；执行者在无 running 任务时也立即返回
+    #[test]
+    fn wait_syncs_idle_returns_for_client_and_idle_daemon() {
+        let root = std::env::temp_dir().join(format!("grs-idle-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&root).unwrap();
+        let state = Arc::new(AppState::open(root.join("app.db")).unwrap());
+        {
+            let conn = lock(&state.conn);
+            conn.execute(
+                "INSERT INTO sync_jobs (repo_id, operator, lang, state, created_at)
+                 VALUES ('r1', 'test', 'zh', 'running', 0)",
+                [],
+            )
+            .unwrap();
+        }
+        // 客户端（未持有守护角色）：立即返回
+        state.wait_syncs_idle();
+        // 执行者 + 无 running 任务：立即返回
+        {
+            let conn = lock(&state.conn);
+            conn.execute("DELETE FROM sync_jobs", []).unwrap();
+        }
+        assert!(state.try_become_daemon());
+        state.wait_syncs_idle();
+        drop(state);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     /// 客户端轮询线程：执行者在其他进程时，本进程对仓库状态变化合成
     /// sync-status 事件（首帧快照静默，其后变化才发）
     #[test]

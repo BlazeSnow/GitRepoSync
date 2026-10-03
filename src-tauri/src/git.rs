@@ -96,6 +96,7 @@ pub(crate) fn perform_git_sync(
     lang: Lang,
 ) -> (String, String) {
     let local = base_dir.join(&repo.name);
+    let fresh_clone = !local.exists();
     let git_timeout = Duration::from_secs(GIT_TIMEOUT_SECS);
     let lfs_timeout = Duration::from_secs(LFS_TIMEOUT_SECS);
     let mut done: Vec<String> = Vec::new();
@@ -196,6 +197,12 @@ pub(crate) fn perform_git_sync(
         if !step.ok_msg.is_empty() {
             done.push(step.ok_msg.clone());
         }
+    }
+
+    // 全新克隆的中转目录只有 origin 远端：把 DB 中的备份目标补写进
+    // config，自动发现的远端集合同步才不会将其清除（B5 时序根源）
+    if fresh_clone {
+        sync_config_remotes(&local, targets);
     }
 
     // 推送引用必须在 fetch 完成后计算：origin 跟踪分支（补全本地未 checkout 的分支）
@@ -347,6 +354,72 @@ pub(crate) fn reset_running_targets(state: &AppState, repo_id: &str) {
         "UPDATE sync_targets SET last_status = 'idle' WHERE repo_id = ?1 AND last_status = 'running'",
         params![repo_id],
     );
+}
+
+/// 将 DB 中的备份目标镜像到本地中转目录的 .git/config：
+/// 逐个 `git remote add` / `set-url`，并移除 config 中已不再是目标、
+/// 且非 origin/upstream 的远端。手动与 MCP 配置的目标由此成为 config
+/// 的一部分——自动发现的远端集合同步不会再清除它们（此前 DB-only 的
+/// 目标每次发现都被删光，仓库退回「未配置」）。
+/// 目录不存在（尚未克隆，由流水线克隆后补写）或 config 不可读时跳过，
+/// 避免误判误删；尽力而为，不阻断保存。
+pub(crate) fn mirror_targets_to_config(state: &AppState, repo_id: &str, repo_name: &str) {
+    let base_dir = state
+        .get_setting("base_dir")
+        .unwrap_or_else(crate::state::default_base_dir);
+    let local = Path::new(&base_dir).join(repo_name);
+    if !local.join(".git").exists() {
+        return;
+    }
+    let targets: Vec<(String, String)> = {
+        let conn = lock(&state.conn);
+        let Ok(mut stmt) =
+            conn.prepare("SELECT remote, url FROM sync_targets WHERE repo_id = ?1 ORDER BY remote")
+        else {
+            return;
+        };
+        stmt.query_map(params![repo_id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })
+        .map(|rows| rows.filter_map(Result::ok).collect())
+        .unwrap_or_default()
+    };
+    sync_config_remotes(&local, &targets);
+}
+
+/// 以 targets 为准同步本地 config 的远端集合（origin 与保留名 upstream 不动）
+fn sync_config_remotes(local: &Path, targets: &[(String, String)]) {
+    // config 不可读（OneDrive 占位、权限等）：跳过，避免按“没有远端”误删
+    let Some(config_remotes) = crate::discover::parse_remote_urls(local) else {
+        return;
+    };
+    for (remote, url) in targets {
+        let args: Vec<&str> = if config_remotes.iter().any(|(n, _)| n == remote) {
+            vec!["remote", "set-url", remote, url]
+        } else {
+            vec!["remote", "add", remote, url]
+        };
+        let _ = run_quiet_git(local, &args);
+    }
+    for (name, _) in &config_remotes {
+        if name == "origin" || name == crate::discover::RESERVED_TARGET_REMOTE {
+            continue;
+        }
+        if !targets.iter().any(|(n, _)| n == name) {
+            let _ = run_quiet_git(local, &["remote", "remove", name]);
+        }
+    }
+}
+
+fn run_quiet_git(cwd: &Path, args: &[&str]) -> bool {
+    let mut cmd = Command::new("git");
+    cmd.args(args);
+    apply_git_env(&mut cmd);
+    cmd.current_dir(cwd);
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    cmd.status().map(|s| s.success()).unwrap_or(false)
 }
 
 /// 运行 git 命令：超时强杀按失败处理。成功返回 stderr/stdout 合并文本（可能为空）。
@@ -760,6 +833,166 @@ mod tests {
         assert!(bad_msg.is_some(), "失败目标带错误消息");
         assert!(bad_ts.is_none(), "失败目标不更新时间");
 
+        drop(state);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 镜像函数：补齐缺失远端（add）、更新已有远端 URL（set-url）、
+    /// 移除不再作为目标的非保留远端；origin 与 upstream（保留名）不动
+    #[test]
+    fn sync_config_remotes_mirrors_targets() {
+        let root = std::env::temp_dir().join(format!("grs-mirror-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&root).unwrap();
+        let repo = root.join("r");
+        std::fs::create_dir_all(&repo).unwrap();
+        let git = |args: &[&str]| {
+            let s = Command::new("git")
+                .args(args)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .current_dir(&repo)
+                .status()
+                .unwrap();
+            assert!(s.success(), "git {:?} 执行失败", args);
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["remote", "add", "origin", "https://github.com/u/r.git"]);
+        git(&["remote", "add", "upstream", "https://github.com/orig/r.git"]);
+        git(&["remote", "add", "backup", "https://old/r.git"]);
+        git(&["remote", "add", "stale", "https://stale/r.git"]);
+
+        let targets = vec![
+            ("backup".to_string(), "https://new/r.git".to_string()),
+            ("other".to_string(), "https://other/r.git".to_string()),
+        ];
+        sync_config_remotes(&repo, &targets);
+
+        let remotes = crate::discover::parse_remote_urls(&repo).unwrap();
+        let url = |name: &str| {
+            remotes
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, u)| u.clone())
+        };
+        assert_eq!(
+            url("backup").as_deref(),
+            Some("https://new/r.git"),
+            "已有远端更新 URL"
+        );
+        assert_eq!(
+            url("other").as_deref(),
+            Some("https://other/r.git"),
+            "缺失远端被补齐"
+        );
+        assert_eq!(
+            url("origin").as_deref(),
+            Some("https://github.com/u/r.git"),
+            "origin 不动"
+        );
+        assert_eq!(
+            url("upstream").as_deref(),
+            Some("https://github.com/orig/r.git"),
+            "保留名不动"
+        );
+        assert!(url("stale").is_none(), "不再是目标的远端被移除");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// B5 回归：全新克隆后的中转目录只有 origin 远端，流水线将 DB 目标
+    /// 补写进 config——自动发现的远端集合同步不再清除该目标
+    #[test]
+    fn perform_git_sync_mirrors_targets_after_clone() {
+        use crate::discover::discover;
+        use crate::state::AppState;
+
+        let root = std::env::temp_dir().join(format!("grs-b5-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&root).unwrap();
+        let base = root.join("base");
+        let source = root.join("src");
+        let target = root.join("target.git");
+        let git = |args: &[&str], cwd: &Path| {
+            let s = std::process::Command::new("git")
+                .args(args)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .current_dir(cwd)
+                .status()
+                .unwrap();
+            assert!(s.success(), "git {:?} 执行失败", args);
+        };
+        std::fs::create_dir_all(&source).unwrap();
+        git(&["init", "-q", "-b", "main"], &source);
+        git(&["config", "user.name", "t"], &source);
+        git(&["config", "user.email", "t@t"], &source);
+        std::fs::write(source.join("a.txt"), "v1").unwrap();
+        git(&["add", "."], &source);
+        git(&["commit", "-q", "-m", "v1"], &source);
+        git(&["init", "-q", "--bare", target.to_str().unwrap()], &root);
+
+        let state = AppState::open(root.join("app.db")).unwrap();
+        state.set_setting("base_dir", &base.to_string_lossy());
+        {
+            let conn = lock(&state.conn);
+            conn.execute(
+                "INSERT INTO repos (id, name, source) VALUES ('r1', 'demo', ?1)",
+                params![source.to_string_lossy()],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO sync_targets (repo_id, remote, url) VALUES ('r1', 'backup', ?1)",
+                params![target.to_string_lossy()],
+            )
+            .unwrap();
+        }
+        let repo = Repo {
+            id: "r1".to_string(),
+            name: "demo".to_string(),
+            source: source.to_string_lossy().to_string(),
+            last_synced: None,
+            last_status: "idle".to_string(),
+            last_message: None,
+            targets: Vec::new(),
+        };
+        let targets = vec![("backup".to_string(), target.to_string_lossy().to_string())];
+
+        let (status, message) =
+            perform_git_sync(&state, "r1", &repo, &targets, &base, crate::lang::Lang::Zh);
+        assert_eq!(status, "success", "message: {message}");
+
+        // 中转目录 config 已有 backup 远端（DB 目标被物化）；
+        // URL 以 git 自己的读取为准（git 会转义存储 Windows 路径反斜杠）
+        let transfer = base.join("demo");
+        let get_url = |name: &str| {
+            let out = std::process::Command::new("git")
+                .args(["remote", "get-url", name])
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .current_dir(&transfer)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "remote get-url {name} 失败");
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        assert_eq!(
+            get_url("backup"),
+            target.to_string_lossy(),
+            "克隆后 config 应包含目标远端"
+        );
+        assert_eq!(
+            get_url("origin"),
+            source.to_string_lossy(),
+            "origin 指向源地址"
+        );
+
+        // 自动发现的远端集合同步不再清除该目标
+        discover(&state, "test", crate::lang::Lang::Zh).unwrap();
+        let n: i64 = {
+            let conn = lock(&state.conn);
+            conn.query_row(
+                "SELECT COUNT(*) FROM sync_targets WHERE repo_id = 'r1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(n, 1, "发现后目标不应被清除");
         drop(state);
         std::fs::remove_dir_all(&root).ok();
     }

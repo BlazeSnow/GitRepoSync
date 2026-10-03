@@ -17,7 +17,7 @@ pub(crate) const RESERVED_TARGET_REMOTE: &str = "upstream";
 /// 支持工作树（.git 为文件，内容 gitdir: <路径>）。
 /// 返回 None 表示 config 无法读取（如 OneDrive 占位文件、权限问题）——
 /// 调用方应跳过该仓库，避免把“读不到”当成“没有远端”而误删已有目标。
-fn parse_remote_urls(repo_dir: &Path) -> Option<Vec<(String, String)>> {
+pub(crate) fn parse_remote_urls(repo_dir: &Path) -> Option<Vec<(String, String)>> {
     let dotgit = repo_dir.join(".git");
     let git_dir = if dotgit.is_dir() {
         dotgit

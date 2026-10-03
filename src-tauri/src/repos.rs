@@ -153,6 +153,10 @@ pub fn save_repo(
             repo
         }
     };
+    // 目标镜像到本地 config：自动发现的远端集合同步以 config 为准，
+    // 不镜像则 DB-only 的目标会在下次发现时被清除（目录未克隆时跳过，
+    // 由流水线克隆后补写）
+    crate::git::mirror_targets_to_config(state.inner(), &repo.id, &repo.name);
     state.add_log(
         &tr_a(
             lang,
@@ -263,6 +267,79 @@ mod tests {
         let d = crate::state::default_base_dir();
         assert!(d.ends_with("repo"));
         assert!(!d.starts_with('~'));
+    }
+
+    /// save_repo 将目标镜像进本地 config（存在的中转目录）：
+    /// 新增目标补进 config、编辑整体替换时移除不再作为目标的远端
+    #[test]
+    fn save_repo_mirrors_targets_to_local_config() {
+        use tauri::Manager;
+
+        let (app, state, root) = open_mock_app("mirror");
+        let st = app.state::<Arc<AppState>>();
+        insert_session(state.as_ref(), "tok");
+        let base = root.join("base");
+        let demo = base.join("demo");
+        std::fs::create_dir_all(&demo).unwrap();
+        let git = |args: &[&str]| {
+            let s = std::process::Command::new("git")
+                .args(args)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .current_dir(&demo)
+                .status()
+                .unwrap();
+            assert!(s.success(), "git {:?} 执行失败", args);
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["remote", "add", "origin", "https://github.com/u/demo.git"]);
+        state.set_setting("base_dir", &base.to_string_lossy());
+
+        // 新增：两个目标镜像进 config
+        let repo = save_repo(
+            st.clone(),
+            "tok".into(),
+            None,
+            "demo".into(),
+            "https://src/demo.git".into(),
+            vec![
+                TargetInput { remote: "backup".into(), url: "https://bak/demo.git".into() },
+                TargetInput { remote: "extra".into(), url: "https://extra/demo.git".into() },
+            ],
+        )
+        .unwrap();
+        let remotes = crate::discover::parse_remote_urls(&demo).unwrap();
+        let url = |name: &str| remotes.iter().find(|(n, _)| n == name).map(|(_, u)| u.clone());
+        assert_eq!(url("backup").as_deref(), Some("https://bak/demo.git"));
+        assert_eq!(url("extra").as_deref(), Some("https://extra/demo.git"));
+        assert_eq!(
+            url("origin").as_deref(),
+            Some("https://github.com/u/demo.git"),
+            "origin 不动"
+        );
+
+        // 编辑整体替换：extra 从 config 移除、backup 更新 URL
+        save_repo(
+            st.clone(),
+            "tok".into(),
+            Some(repo.id.clone()),
+            "demo".into(),
+            "https://src/demo.git".into(),
+            vec![TargetInput { remote: "backup".into(), url: "https://bak2/demo.git".into() }],
+        )
+        .unwrap();
+        let remotes = crate::discover::parse_remote_urls(&demo).unwrap();
+        let url = |name: &str| remotes.iter().find(|(n, _)| n == name).map(|(_, u)| u.clone());
+        assert_eq!(url("backup").as_deref(), Some("https://bak2/demo.git"));
+        assert!(url("extra").is_none(), "整体替换后不再作为目标的远端应移除");
+        assert_eq!(
+            url("origin").as_deref(),
+            Some("https://github.com/u/demo.git"),
+            "origin 不动"
+        );
+
+        drop(st);
+        drop(app);
+        std::fs::remove_dir_all(&root).ok();
     }
 
     /// open_repo_dir 的目录解析：存在返回路径、缺失与未知 id 报错

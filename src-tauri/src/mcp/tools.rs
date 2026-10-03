@@ -329,6 +329,8 @@ pub(super) fn tools_call(
                     id
                 }
             };
+            // 目标镜像进本地 config：发现逻辑的集合同步不会再清除
+            crate::git::mirror_targets_to_config(state, &repo_id, &rname);
             state.add_log(
                 &tr_a(lang, "log-mcp-repo-added", &[("name", &rname)]),
                 OPERATOR,
@@ -453,6 +455,8 @@ pub(super) fn tools_call(
                 }
                 name.unwrap_or(current_name)
             };
+            // 目标镜像进本地 config（含移除不再作为目标的远端）
+            crate::git::mirror_targets_to_config(state, &id, &log_name);
             state.add_log(
                 &tr_a(lang, "log-mcp-repo-updated", &[("name", &log_name)]),
                 OPERATOR,
@@ -918,6 +922,74 @@ mod tests {
                 .unwrap()
         };
         assert_eq!(jobs, 0, "未产生真实同步任务");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// add_repo / update_repo 将目标镜像进本地 config；自动发现的
+    /// 远端集合同步不再清除这些目标（B5 回归）
+    #[test]
+    fn add_and_update_repo_mirror_targets_to_config() {
+        let (state, root) = open_state();
+        let base = root.join("base");
+        let demo = base.join("demo");
+        std::fs::create_dir_all(&demo).unwrap();
+        let git = |args: &[&str]| {
+            let s = std::process::Command::new("git")
+                .args(args)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .current_dir(&demo)
+                .status()
+                .unwrap();
+            assert!(s.success(), "git {:?} 执行失败", args);
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["remote", "add", "origin", "https://github.com/u/demo.git"]);
+        state.set_setting("base_dir", &base.to_string_lossy());
+
+        let added = call(
+            &state,
+            "add_repo",
+            json!({
+                "name": "demo", "source": "https://src/demo.git",
+                "targets": [{ "remote": "backup", "url": "https://bak/demo.git" }]
+            }),
+        )
+        .unwrap();
+        let remotes = crate::discover::parse_remote_urls(&demo).unwrap();
+        assert!(
+            remotes.iter().any(|(n, u)| n == "backup" && u == "https://bak/demo.git"),
+            "add_repo 后 config 应包含目标远端: {remotes:?}"
+        );
+
+        // 整体替换：backup 从 config 移除、gitlab 补进
+        let id = added["id"].as_str().unwrap().to_string();
+        call(
+            &state,
+            "update_repo",
+            json!({
+                "id": id,
+                "targets": [{ "remote": "gitlab", "url": "https://gl/demo.git" }]
+            }),
+        )
+        .unwrap();
+        let remotes = crate::discover::parse_remote_urls(&demo).unwrap();
+        assert!(
+            remotes.iter().any(|(n, u)| n == "gitlab" && u == "https://gl/demo.git"),
+            "update_repo 后 config 应包含新目标: {remotes:?}"
+        );
+        assert!(!remotes.iter().any(|(n, _)| n == "backup"), "被替换的目标应从 config 移除");
+
+        // 发现以 config 为准：DB 目标为 gitlab 且不再被清除
+        let repos = call(&state, "discover_repos", json!({})).unwrap();
+        let demo_row = repos
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["name"] == json!("demo"))
+            .unwrap();
+        let targets = demo_row["targets"].as_array().unwrap();
+        assert_eq!(targets.len(), 1, "发现后目标保持: {targets:?}");
+        assert_eq!(targets[0]["remote"], json!("gitlab"));
         std::fs::remove_dir_all(&root).ok();
     }
 

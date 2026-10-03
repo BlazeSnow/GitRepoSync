@@ -85,14 +85,16 @@ export const en = {
   toolDiscoverRepos:
     "Scan the first-level subdirectories of the base directory (staging directory) and register the git repositories found: the origin remote becomes the source, all other remotes become backup targets; returns the full repository list after registration",
   toolAddRepo:
-    "Add or update a sync repository (idempotent by name): when a repository with the same name exists, its source is updated, targets are merged and it is re-registered instead of creating a duplicate entry; syncing pulls from the source into the local base directory as a staging copy (updating LFS and submodules), then pushes to the target repository",
+    "Configuration is read-only: returns guidance for setting the repository up yourself (clone into the transfer directory, git remote add backup remotes, then discover_repos and sync_repo)",
   toolUpdateRepo:
-    "Update the configuration of the specified sync repository: rename and change the source URL; when targets is provided it fully replaces the target list (to only add targets use add_repo, which merges)",
+    "Configuration is read-only: returns guidance for editing remotes yourself with git remote",
   toolRemoveRepo:
-    "Remove the specified sync repository (soft delete): it is hidden from the list and its targets are cleared; the directory under the base directory is not deleted and the repository will not be re-discovered",
+    "Configuration is read-only: returns guidance for unregistering (use stop_syncs to stop syncing)",
   toolSyncRepo: "Start syncing the specified repository immediately (async)",
   toolSyncRepos:
     "Trigger batch syncs: provide ids to sync a list, or days for a range (0 = all repositories, N = not synced within the last N days, including never synced, matching the app's range); unconfigured repositories are skipped, ids takes precedence when both are given. Async; use get_sync_status to check progress",
+  toolStopSyncs:
+    "Stop syncing: terminate queued and running sync jobs (ids optional; defaults to all active jobs), works across processes",
   toolGetSyncStatus: "Query the latest sync status of all repositories",
   toolListLogs: "List the operation log newest first (action, operator, time)",
   toolGetBaseDir: "Query the local repository base directory (staging directory)",

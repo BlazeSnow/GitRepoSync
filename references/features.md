@@ -18,7 +18,7 @@
 其他保障：
 
 - 每个网络 git 命令带超时（默认 1800s，LFS 3600s）与 HTTP 低速中断（停滞 120s 判死），超时或“停止同步”时强杀子进程；「停止同步」落在两条命令的间隙（如 LFS 重试等待期）同样生效——停止请求入库内标记，运行中的命令轮询自查（至多一个轮询周期内终止），流水线在步骤边界收尾为 stopped
-- **跨进程同步互斥**：GUI 与 MCP 为两个独立进程、内存中的同步状态互不可见；同一仓库的同步通过数据目录下 `sync-locks/{repo_id}.lock` 的独占文件锁互斥（入队时获取、同步收尾或停止时释放）——任一方同步中，另一方启动同仓库同步被拒绝（`started=false`，GUI 计数与 MCP 报告如实反映）；进程崩溃由操作系统自动释放锁，无残留死锁。注意：停止语义仍限本进程（跨进程停止暂未实现）
+- **同步执行者单例（守护角色）**：数据目录 `sync-daemon.lock` 的持有者是唯一的同步执行者，GUI 与 MCP 均可竞选（启动与每次投递时尝试；执行者退出后由存活进程的后台线程接管，接管时复位上一任残留的 running 任务、停止标记与仓库 running 状态）。任务经 SQLite `sync_jobs` 表投递（同仓库并发任务被唯一部分索引原子拒绝，跨进程去重），执行者单线程串行消费；停止请求写 `sync_stop` 表、由执行者的 git 轮询自查终止——**跨进程停止生效**。GUI 未持有执行者角色时，后台线程轮询状态变化并合成 `sync-status` 事件，表格与 toast 的实时性不因执行者位置而变化
 - 多个仓库**串行**同步（内部队列依次执行），避免并发拉取抢占网络
 - 同步期间 `GIT_TERMINAL_PROMPT=0`，避免私有仓库卡在交互式输入
 - git 子进程 PATH 增强：图形界面（尤其 macOS 从 Finder/Dock 启动）继承的 PATH 极简，Homebrew 等用户级安装的 git-lfs 与凭据助手不在其中；启动时为所有 git 子进程补充常见安装目录（Homebrew / MacPorts / Linuxbrew，目录存在且未收录才追加，原 PATH 优先级不变），避免 LFS 误报未安装
@@ -35,6 +35,8 @@
 | `repos` | 同步仓库列表与最近同步状态 |
 | `settings` | 键值设置（`base_dir` 仓库基地址、`mcp_api_key`） |
 | `operation_logs` | 软件全部操作历史（操作、操作人、操作时间） |
+| `sync_jobs` | 同步任务队列（仓库、操作人、语言、queued/running 状态） |
+| `sync_stop` | 跨进程停止标记（执行者的 git 轮询自查后终止并清理） |
 
 首次启动自动建表并初始化：初始用户 `admin` / `admin123`、默认基地址 `~/repo`、随机 MCP APIKEY。
 
@@ -78,7 +80,7 @@
 
 **实现说明**：软件采用 MCP stdio 连接方式——Agent 客户端以子进程运行本程序的 `mcp` 模式（`git-repo-sync.exe mcp`），协议为换行分隔的 JSON-RPC 2.0（stdin 读入、stdout 输出）。通过 APIKEY 鉴权：客户端经环境变量 `GIT_REPO_SYNC_API_KEY` 或 `--api-key` 参数提供，与 `settings` 表中的 APIKEY 一致方可访问。客户端断开后进程会等待在途同步完成再退出，不会中断同步。GUI 与 mcp 子命令共享同一 SQLite 数据库。
 
-可用工具（v1.0.0-beta.2 起 11 个）：
+可用工具（v1.0.0-beta.6 起 12 个）：
 
 | 工具 | 说明 |
 | --- | --- |
@@ -89,6 +91,7 @@
 | `remove_repo` | 移除仓库（软删除：隐藏并清空目标） |
 | `sync_repo` | 立即同步指定仓库（异步） |
 | `sync_repos` | 批量触发同步：`ids` 列表或 `days` 范围（0=全部，N=最近 N 天未同步，含从未同步，与界面范围一致）；未配置仓库自动跳过，按仓库报告是否启动 |
+| `stop_syncs` | 停止同步：终止排队与运行中的任务（`ids` 可选，缺省全部活动任务），跨进程生效；返回出队与标记停止的仓库 |
 | `get_sync_status` | 查询所有仓库最近同步状态 |
 | `list_logs` | 按时间倒序列出操作日志（`limit` 可选，默认 200、上限 1000；只读不写日志） |
 | `get_base_dir` | 查询本地仓库基地址 |
@@ -102,7 +105,7 @@
 - `upstream` 为保留远端名：`add_repo` / `update_repo` 拒绝以 `upstream` 作为目标远端（fork 上游不参与同步，与界面保存和自动发现的排除一致）
 - 旧库中历史版本产生的同名重复行，启动时自动去重（保留可见行中最早创建的，目标并入保留行），`repos.name` 有唯一索引兜底；界面添加/编辑同样校验重名
 
-**稳定性**：GUI 与 MCP 子命令共用同一 SQLite（WAL + 5 秒 busy_timeout，多进程写冲突等待而非报错）；同仓库同步跨进程互斥（数据目录 `sync-locks/{repo_id}.lock` 独占文件锁，防止 GUI 与 MCP 双流水线并发操作同一中转目录）；MCP 单请求 panic 隔离（应答 JSON-RPC 内部错误、进程存活），启动失败向 stderr 输出原因后以非零码退出；每个请求的方法与耗时输出到 stderr，便于排查断连类问题。
+**稳定性**：GUI 与 MCP 子命令共用同一 SQLite（WAL + 5 秒 busy_timeout，多进程写冲突等待而非报错）；同步执行收敛到唯一守护角色（`sync-daemon.lock` 竞选、任务与停止走 SQLite，见「软件逻辑」），杜绝双流水线并发操作同一中转目录；MCP 单请求 panic 隔离（应答 JSON-RPC 内部错误、进程存活），启动失败向 stderr 输出原因后以非零码退出；每个请求的方法与耗时输出到 stderr，便于排查断连类问题。
 
 ## 7. 设置页面
 
@@ -131,6 +134,6 @@
 ## 10. 测试
 
 - 运行：`pnpm test`（前端 vitest + jsdom + @testing-library/react）、`cd src-tauri && cargo test`（后端）
-- 后端（40 个）：Tauri 命令层借助 `tauri::test` 的 mock 运行时直接测试（`state.rs` 的 `testutil::open_mock_app` 提供独立临时数据库的 mock 应用）——登录/登出/改密全流程（auth）、仓库 CRUD 含目标清洗/重名/软删除幂等（repos）、基地址与 APIKEY 与日志（settings）、多目标推送独立失败语义（git）、停止同步终止 git 子进程与命令间隙停止（sync）；另有流水线端到端（真实 git 子进程，本地 bare 仓库）、路径归一化、自动发现、MCP 协议层与工具语义、旧库迁移等
+- 后端（44 个）：Tauri 命令层借助 `tauri::test` 的 mock 运行时直接测试（`state.rs` 的 `testutil::open_mock_app` 提供独立临时数据库的 mock 应用）——登录/登出/改密全流程（auth）、仓库 CRUD 含目标清洗/重名/软删除幂等（repos）、基地址与 APIKEY 与日志（settings）、多目标推送独立失败语义（git）、停止同步终止 git 子进程与命令间隙停止（sync）；另有流水线端到端（真实 git 子进程，本地 bare 仓库）、路径归一化、自动发现、MCP 协议层与工具语义、旧库迁移等
 - 前端（46 个）：外观主题、多语言时间格式化、类名工具、i18n 词典键两语言一致、Toast 通知（弹出/关闭/上限/自动消失）、同步事件 toast 映射；组件渲染与交互——登录页、同步仓库页（范围筛选、按钮互斥、刷新仓库、表格排序与排序持久化、右键菜单图标与打开目录、操作 toast、Radix Select 交互）、日志页、MCP 页、设置页、仓库编辑弹窗、侧边栏布局
 - 测试约定：前端组件测试统一在 beforeEach 中先 `import("@/i18n")` 触发 i18next 实例初始化再 `changeLanguage("zh")`；涉及 Radix Select 的用例需为 jsdom 打桩 `scrollIntoView` / pointer capture / `ResizeObserver`，选中选项走 `fireEvent.click`（pointerup 合成事件在 jsdom 不生效）；后端命令层测试各自使用独立临时目录数据库，结束时清理

@@ -98,6 +98,8 @@ tool-sync-repo-id = Repository ID
 tool-sync-repos = Trigger batch syncs: provide ids to sync a list, or days for a range (0 = all repositories, N = not synced within the last N days, including never synced, matching the app's range); unconfigured repositories are skipped, ids takes precedence when both are given. Async; use get_sync_status to check progress
 tool-sync-repos-ids = Repository ID list (optional)
 tool-sync-repos-days = Sync range in days (optional; 0 = all, N = not synced within the last N days, including never synced)
+tool-stop-syncs = Stop syncing: terminate queued and running sync jobs (works across processes)
+tool-stop-syncs-ids = Repository ids to stop; omit to stop all active jobs
 tool-get-sync-status = Query the latest sync status of all repositories
 tool-list-logs = List the operation log newest first (action, operator, time)
 tool-list-logs-limit = Maximum number of entries to return (optional, default 200, max 1000)

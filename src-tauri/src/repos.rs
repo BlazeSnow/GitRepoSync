@@ -176,7 +176,7 @@ pub fn delete_repo(
 ) -> Result<(), String> {
     let username = require_session(&state, &token)?;
     let lang = gui_lang();
-    if lock(&state.syncing).contains(&id) {
+    if state.job_active(&id) {
         return Err(tr(lang, "repo-syncing"));
     }
     let name = {
@@ -365,6 +365,22 @@ mod tests {
         assert_eq!(updated.name, "demo2");
         let list = list_repos(st.clone(), "tok".into()).unwrap();
         assert_eq!(list[0].targets.len(), 2, "编辑应整体替换目标");
+
+        // 有排队/运行中同步任务的仓库拒绝删除（跨进程任务表互斥）
+        {
+            let conn = lock(&_state.conn);
+            conn.execute(
+                "INSERT INTO sync_jobs (repo_id, operator, lang, state, created_at)
+                 VALUES (?1, 'mcp', 'zh', 'queued', 0)",
+                params![repo.id],
+            )
+            .unwrap();
+        }
+        assert!(delete_repo(st.clone(), "tok".into(), repo.id.clone()).is_err());
+        {
+            let conn = lock(&_state.conn);
+            conn.execute("DELETE FROM sync_jobs", []).unwrap();
+        }
 
         // 软删除：列表不可见；重复删除幂等成功（行仍存在只是隐藏）
         delete_repo(st.clone(), "tok".into(), repo.id.clone()).unwrap();

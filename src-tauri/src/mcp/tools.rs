@@ -112,6 +112,20 @@ pub(super) fn tools_list(lang: Lang) -> Value {
                 }
             },
             {
+                "name": "stop_syncs",
+                "description": tr(lang, "tool-stop-syncs"),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "ids": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": tr(lang, "tool-stop-syncs-ids")
+                        }
+                    }
+                }
+            },
+            {
                 "name": "get_sync_status",
                 "description": tr(lang, "tool-get-sync-status"),
                 "inputSchema": { "type": "object", "properties": {} }
@@ -331,7 +345,7 @@ pub(super) fn tools_call(
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            if lock(&state.syncing).contains(&id) {
+            if state.job_active(&id) {
                 return Err((-32602, tr(lang, "repo-syncing")));
             }
             // 存在性按 repos 行本身判定：自动发现的仓库可能没有目标，
@@ -361,7 +375,7 @@ pub(super) fn tools_call(
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            if lock(&state.syncing).contains(&id) {
+            if state.job_active(&id) {
                 return Err((-32602, tr(lang, "repo-syncing")));
             }
             let optional_field = |k: &str| {
@@ -485,7 +499,8 @@ pub(super) fn tools_call(
             if target_n == 0 {
                 return Err((-32602, tr(lang, "sync-no-targets")));
             }
-            let started = sync::spawn_sync(state.clone(), None, id, OPERATOR.to_string(), lang);
+            let results = sync::enqueue_syncs(state, std::slice::from_ref(&id), OPERATOR, lang);
+            let started = results.first().map(|(_, s)| *s).unwrap_or(false);
             state.add_log(&tr(lang, "log-mcp-sync"), OPERATOR);
             Ok(json!({ "started": started }))
         }
@@ -513,8 +528,8 @@ pub(super) fn tools_call(
                     return Err((-32602, tr(lang, "sync-repos-no-selector")));
                 }
             };
-            // 未配置 / 已在同步的仓库报告未启动；真实同步由串行队列执行
-            let results = sync::enqueue_syncs(state, None, &ids, OPERATOR, lang);
+            // 未配置 / 已在同步的仓库报告未启动；真实同步由执行者串行消费
+            let results = sync::enqueue_syncs(state, &ids, OPERATOR, lang);
             let started = results.iter().filter(|(_, s)| *s).count();
             if started > 0 {
                 state.add_log(
@@ -533,6 +548,24 @@ pub(super) fn tools_call(
                     .iter()
                     .map(|(id, s)| json!({ "id": id, "started": s }))
                     .collect::<Vec<_>>(),
+            }))
+        }
+        "stop_syncs" => {
+            let ids_opt: Option<Vec<String>> = args
+                .get("ids")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|x| x.as_str().map(str::to_string))
+                        .collect()
+                });
+            let (dequeued, flagged) = sync::stop_jobs(state, ids_opt.as_deref());
+            if !dequeued.is_empty() || !flagged.is_empty() {
+                state.add_log(&tr(lang, "log-sync-stopped-cmd"), OPERATOR);
+            }
+            Ok(json!({
+                "dequeued": dequeued,
+                "stopRequested": flagged,
             }))
         }
         "get_base_dir" => Ok(json!({ "base_dir": state
@@ -821,9 +854,13 @@ mod tests {
             call(&state, "sync_repo", json!({ "id": "r2" })).is_err(),
             "无备份目标"
         );
-        // 三次拒绝均未入队：同步集合与队列保持为空
-        assert!(lock(&state.syncing).is_empty());
-        assert!(lock(&state.sync_queue).jobs.is_empty());
+        // 三次拒绝均未入队：任务表保持为空
+        let jobs: i64 = {
+            let conn = lock(&state.conn);
+            conn.query_row("SELECT COUNT(*) FROM sync_jobs", [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(jobs, 0);
         std::fs::remove_dir_all(&root).ok();
     }
 
@@ -875,7 +912,55 @@ mod tests {
         let r = call(&state, "sync_repos", json!({ "days": 0 })).unwrap();
         assert_eq!(r["requested"], json!(0));
         assert_eq!(r["started"], json!(0));
-        assert!(lock(&state.syncing).is_empty(), "未产生真实同步任务");
+        let jobs: i64 = {
+            let conn = lock(&state.conn);
+            conn.query_row("SELECT COUNT(*) FROM sync_jobs", [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(jobs, 0, "未产生真实同步任务");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// stop_syncs：排队任务直接出队、运行中任务写停止标记（跨进程语义），
+    /// 未指定 ids 时作用于全部活动任务
+    #[test]
+    fn stop_syncs_tool_dequeues_and_flags() {
+        let (state, root) = open_state();
+        // 直接插入任务行（不竞选执行者，避免 worker 拉起真实同步）
+        {
+            let conn = lock(&state.conn);
+            for (id, st) in [("r1", "running"), ("r2", "queued")] {
+                conn.execute(
+                    "INSERT INTO sync_jobs (repo_id, operator, lang, state, created_at)
+                     VALUES (?1, 'mcp', 'zh', ?2, 0)",
+                    rusqlite::params![id, st],
+                )
+                .unwrap();
+            }
+        }
+        // 指定 ids：仅作用于 r2（排队 → 出队）
+        let r = call(&state, "stop_syncs", json!({ "ids": ["r2"] })).unwrap();
+        assert_eq!(r["dequeued"], json!(["r2"]));
+        assert_eq!(r["stopRequested"], json!([]));
+        assert!(!state.job_active("r2"));
+        assert!(state.job_active("r1"), "运行中任务不受他人 ids 请求影响");
+
+        // 全部停止：运行中的 r1 被标记
+        let r = call(&state, "stop_syncs", json!({})).unwrap();
+        assert_eq!(r["stopRequested"], json!(["r1"]));
+        assert!(state.stop_requested("r1"));
+
+        // 日志以 mcp 为操作人写入
+        let operator: String = {
+            let conn = lock(&state.conn);
+            conn.query_row(
+                "SELECT operator FROM operation_logs ORDER BY id DESC LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(operator, "mcp");
         std::fs::remove_dir_all(&root).ok();
     }
 }

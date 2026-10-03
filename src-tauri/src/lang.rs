@@ -59,6 +59,14 @@ impl Lang {
             Self::En => "; ",
         }
     }
+
+    /// 任务表存储用的语言标识（sync_jobs.lang，认领时经 parse_tag 还原）
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Zh => "zh",
+            Self::En => "en",
+        }
+    }
 }
 
 static GUI_LANG: RwLock<Option<Lang>> = RwLock::new(None);

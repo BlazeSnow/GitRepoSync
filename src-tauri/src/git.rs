@@ -2,12 +2,12 @@
 //! 被同步队列（sync.rs）调用；自身不触碰 repos 表状态，只更新 sync_targets 行。
 
 use crate::lang::{tr, tr_a, Lang};
-use crate::state::{lock, now_ms, AppState, Repo, SyncHandle};
+use crate::state::{lock, now_ms, AppState, Repo};
 use rusqlite::params;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -176,13 +176,13 @@ pub(crate) fn perform_git_sync(
     });
 
     for step in &steps {
-        // “停止同步”请求：终止后的剩余步骤不再执行
-        if lock(&state.stop_requested).contains(repo_id) {
+        // “停止同步”请求（跨进程 sync_stop 表）：终止后的剩余步骤不再执行
+        if state.stop_requested(repo_id) {
             return ("stopped".into(), tr(lang, "manually-stopped"));
         }
         match run_git(state, repo_id, &step.args, step.cwd.as_deref(), step.timeout, lang) {
             Err(e) => {
-                if lock(&state.stop_requested).contains(repo_id) {
+                if state.stop_requested(repo_id) {
                     return ("stopped".into(), tr(lang, "manually-stopped"));
                 }
                 if !step.fatal {
@@ -225,7 +225,7 @@ pub(crate) fn perform_git_sync(
     let mut any_fail = false;
     let mut target_errors: Vec<String> = Vec::new();
     for (remote, url) in targets {
-        if lock(&state.stop_requested).contains(repo_id) {
+        if state.stop_requested(repo_id) {
             reset_running_targets(state, repo_id);
             return ("stopped".into(), tr(lang, "manually-stopped"));
         }
@@ -243,7 +243,7 @@ pub(crate) fn perform_git_sync(
                 lfs_timeout,
                 lang,
             ) {
-                if lock(&state.stop_requested).contains(repo_id) {
+                if state.stop_requested(repo_id) {
                     reset_running_targets(state, repo_id);
                     return ("stopped".into(), tr(lang, "manually-stopped"));
                 }
@@ -294,7 +294,7 @@ pub(crate) fn perform_git_sync(
         let target_status;
         match push_result {
             Err(e) => {
-                if lock(&state.stop_requested).contains(repo_id) {
+                if state.stop_requested(repo_id) {
                     reset_running_targets(state, repo_id);
                     return ("stopped".into(), tr(lang, "manually-stopped"));
                 }
@@ -349,8 +349,7 @@ pub(crate) fn reset_running_targets(state: &AppState, repo_id: &str) {
     );
 }
 
-/// 运行 git 命令：子进程注册到 sync_procs 以支持“停止同步”；
-/// 超时强杀按失败处理。成功返回 stderr/stdout 合并文本（可能为空）。
+/// 运行 git 命令：超时强杀按失败处理。成功返回 stderr/stdout 合并文本（可能为空）。
 fn run_git(
     state: &AppState,
     repo_id: &str,
@@ -387,60 +386,32 @@ fn run_git(
         }
         buf
     });
-    let handle = Arc::new(SyncHandle {
-        child: Mutex::new(Some(child)),
-    });
-    lock(&state.sync_procs).insert(repo_id.to_string(), handle.clone());
 
-    // 轮询等待：超时或“停止同步”时强杀子进程
+    // 轮询等待：超时或停止请求时强杀子进程
     let deadline = Instant::now() + timeout;
     let mut status = None;
     let mut killed = false;
     loop {
-        {
-            let mut slot = lock(&handle.child);
-            match slot.as_mut() {
-                // “停止同步”已终止并移除子进程
-                None => {
-                    killed = true;
-                    break;
-                }
-                Some(c) => match c.try_wait() {
-                    Ok(Some(s)) => {
-                        status = Some(s);
-                        break;
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        lock(&state.sync_procs).remove(repo_id);
-                        return Err(format!("{}: {e}", tr(lang, "git-wait-error")));
-                    }
-                },
-            }
-        }
-        // “停止同步”可能落在两条命令之间（此刻无子进程可杀，stop_sync 只能
-        // 登记停止请求）：轮询中自查该标记，出现即自行终止，停止延迟至多
-        // 一个轮询周期； LFS 重试等待期收到的请求也由此覆盖
-        if lock(&state.stop_requested).contains(repo_id) {
-            let mut slot = lock(&handle.child);
-            if let Some(c) = slot.as_mut() {
-                let _ = c.kill();
-                let _ = c.wait();
-            }
-            slot.take();
+        // 「停止同步」跨进程生效：停止方写 sync_stop 表（GUI 命令 / MCP
+        // stop_syncs 工具），此处轮询自查、出现即自行终止——至多一个
+        // 轮询周期；落在两条命令之间的请求由步骤边界检查覆盖
+        if state.stop_requested(repo_id) {
+            let _ = child.kill();
+            let _ = child.wait();
             killed = true;
             break;
         }
-        if Instant::now() >= deadline {
-            {
-                let mut slot = lock(&handle.child);
-                if let Some(c) = slot.as_mut() {
-                    let _ = c.kill();
-                    let _ = c.wait();
-                }
-                slot.take();
+        match child.try_wait() {
+            Ok(Some(s)) => {
+                status = Some(s);
+                break;
             }
-            lock(&state.sync_procs).remove(repo_id);
+            Ok(None) => {}
+            Err(e) => return Err(format!("{}: {e}", tr(lang, "git-wait-error"))),
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
             return Err(tr_a(
                 lang,
                 "git-timeout",
@@ -449,7 +420,6 @@ fn run_git(
         }
         thread::sleep(Duration::from_millis(200));
     }
-    lock(&state.sync_procs).remove(repo_id);
 
     let mut text = err_reader.join().unwrap_or_default();
     let out_text = out_reader.join().unwrap_or_default();
@@ -500,6 +470,7 @@ fn dedupe_lines(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::lock;
 
     #[test]
     fn git_args_prefixes_config() {
@@ -688,8 +659,6 @@ mod tests {
             perform_git_sync(&state, "r1", &repo, &targets, &root, crate::lang::Lang::Zh);
         assert_eq!(status, "failed");
         assert!(!message.is_empty(), "失败应带可读消息");
-        // 失败后不应留有 git 子进程句柄
-        assert!(lock(&state.sync_procs).is_empty());
         drop(state);
         std::fs::remove_dir_all(&root).ok();
     }

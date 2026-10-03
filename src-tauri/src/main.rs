@@ -15,7 +15,7 @@ mod sync;
 
 use state::AppState;
 use std::sync::Arc;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -53,7 +53,17 @@ fn main() {
                 .app_data_dir()
                 .map_err(|e| format!("解析数据目录失败: {e}"))?;
             let state = Arc::new(AppState::open(data_dir.join("app.db"))?);
-            state.reset_running_repos();
+            // sync-status 事件回调：同步执行者在本进程时实时推送界面
+            state.set_emitter(Box::new({
+                let handle = app.handle().clone();
+                move |ev| {
+                    let _ = handle.emit("sync-status", ev);
+                }
+            }));
+            // 竞选同步执行者；未当选（其他进程在执行）时由客户端线程轮询
+            // 合成状态事件、并在原执行者退出后接管
+            state.try_become_daemon();
+            crate::sync::spawn_client_loop(state.clone());
             app.manage(state);
             Ok(())
         })
@@ -175,6 +185,9 @@ fn run_mcp_stdio(args: &[String]) {
             std::process::exit(1);
         }
     };
+    // 竞选同步执行者（GUI 未运行时由 MCP 进程执行同步）；未当选则为客户端
+    state.try_become_daemon();
+    crate::sync::spawn_client_loop(state.clone());
     mcp::run_stdio(state.clone(), provided);
     // stdin 已关闭（客户端断开）：等待在途同步完成后再退出，避免中断同步
     state.wait_syncs_idle();

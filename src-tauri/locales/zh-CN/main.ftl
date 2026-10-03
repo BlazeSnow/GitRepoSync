@@ -97,6 +97,8 @@ tool-sync-repo-id = 仓库 ID
 tool-sync-repos = 批量触发同步：提供 ids 按列表同步，或提供 days 按范围同步（0=全部仓库，N=最近 N 天未同步，含从未同步，与界面范围一致）；未配置（缺源地址或目标）的仓库自动跳过，两者都提供时优先 ids。异步执行，可用 get_sync_status 查询进度
 tool-sync-repos-ids = 仓库 ID 列表（可选）
 tool-sync-repos-days = 同步范围天数（可选；0=全部，N=最近 N 天未同步，含从未同步）
+tool-stop-syncs = 停止同步：终止排队与运行中的同步任务（跨进程生效）
+tool-stop-syncs-ids = 要停止的仓库 ID 列表，缺省为全部活动任务
 tool-get-sync-status = 查询所有仓库的最近同步状态
 tool-list-logs = 按时间倒序列出软件操作日志（操作、操作人、操作时间）
 tool-list-logs-limit = 返回条数上限（可选，默认 200，最大 1000）

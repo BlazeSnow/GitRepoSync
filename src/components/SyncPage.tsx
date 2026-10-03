@@ -22,9 +22,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { ContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
-import { RepoEditDialog } from "@/components/RepoEditDialog";
+import { RepoDetailDialog } from "@/components/RepoDetailDialog";
 import { DeleteRepoDialog } from "@/components/DeleteRepoDialog";
-import { IconEdit, IconFolder, IconPlus, IconRefresh, IconSquare, IconTrash } from "@/components/icons";
+import { IconFolder, IconInfo, IconRefresh, IconSquare, IconTrash } from "@/components/icons";
 import { useToast } from "@/components/Toast";
 import { cn } from "@/lib/utils";
 import { motion } from "motion/react";
@@ -169,8 +169,8 @@ export function SyncPage({ token }: { token: string }) {
   };
   // 表格排序：默认按名称（后端返回顺序），点击状态/时间表头切换；选择持久化到 localStorage
   const [sort, setSort] = useState<SortSpec>(loadSort);
-  // 编辑弹窗：null 表示添加，Repo 表示编辑；null 外层表示关闭
-  const [editor, setEditor] = useState<{ repo: Repo | null } | null>(null);
+  // 详情弹窗（只读）：null 表示关闭；仓库配置由 git remote 管理，软件不代管
+  const [detail, setDetail] = useState<Repo | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Repo | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; repo: Repo } | null>(null);
   const [error, setError] = useState("");
@@ -289,9 +289,9 @@ export function SyncPage({ token }: { token: string }) {
   const menuItems: ContextMenuItem[] = menu
     ? [
         {
-          label: t("editRepo"),
-          icon: (cls) => <IconEdit className={cls} />,
-          onSelect: () => setEditor({ repo: menu.repo }),
+          label: t("repoDetail"),
+          icon: (cls) => <IconInfo className={cls} />,
+          onSelect: () => setDetail(menu.repo),
         },
         {
           label: t("openDir"),
@@ -407,10 +407,6 @@ export function SyncPage({ token }: { token: string }) {
           <IconRefresh />
           {t("refreshRepos")}
         </Button>
-        <Button variant="secondary" onClick={() => setEditor({ repo: null })}>
-          <IconPlus />
-          {t("addRepo")}
-        </Button>
       </div>
 
       {error && <p className="mb-3 text-sm text-destructive">{error}</p>}
@@ -481,7 +477,7 @@ export function SyncPage({ token }: { token: string }) {
                     layout="position"
                     transition={{ duration: 0.2, ease: "easeOut" }}
                     className="cursor-default select-none"
-                    onDoubleClick={() => setEditor({ repo })}
+                    onDoubleClick={() => setDetail(repo)}
                     onContextMenu={(e) => openMenu(e, repo)}
                     title={rowTitle(repo)}
                   >
@@ -512,22 +508,13 @@ export function SyncPage({ token }: { token: string }) {
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />}
 
-      {editor && (
-        <RepoEditDialog
-          token={token}
-          repo={editor.repo}
-          onClose={() => setEditor(null)}
-          onSaved={(saved) => {
-            setEditor(null);
-            toast({
-              kind: "success",
-              title: saved.id === editor.repo?.id ? t("toastRepoEdited", { name: saved.name }) : t("toastRepoAdded", { name: saved.name }),
-            });
-            void load();
-          }}
+      {detail && (
+        <RepoDetailDialog
+          repo={detail}
+          onClose={() => setDetail(null)}
           onDelete={(r) => {
-            // 弹窗内的删除入口：关闭编辑，转由既有确认弹窗执行删除
-            setEditor(null);
+            // 详情内的删除入口：关闭详情，转由既有确认弹窗执行删除
+            setDetail(null);
             setDeleteTarget(r);
           }}
         />

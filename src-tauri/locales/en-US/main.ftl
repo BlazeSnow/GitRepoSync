@@ -30,6 +30,11 @@ log-repo-added = Added repository "{$name}"
 log-repo-edited = Edited repository "{$name}"
 log-repo-deleted = Deleted repository "{$name}"
 
+# ---------- MCP repo configuration guidance (read-only compat entry points) ----------
+mcp-help-add-repo = This app does not manage repository configuration (read-only). Clone the repository into the transfer directory {$base_dir}/<name> yourself and add backup remotes with git remote add (origin is the source; other remotes are backup targets; upstream is reserved). Then call discover_repos to register and sync_repo to sync.
+mcp-help-update-repo = Repository configuration is read-only: edit remotes yourself with git remote in the repository directory (the name is the transfer directory name), then call discover_repos to refresh. Use sync_repo to sync and stop_syncs to stop.
+mcp-help-remove-repo = This app does not manage repository configuration: call stop_syncs to stop syncing; to unregister, move the repository directory out of the base directory and call discover_repos. Use sync_repo to sync and stop_syncs to stop.
+
 # ---------- Sync ----------
 log-sync-started = Started syncing repository "{$name}"
 log-sync-success = Synced repository "{$name}" successfully
@@ -85,16 +90,16 @@ log-mcp-base-dir-changed = Changed repository base directory to {$dir} via MCP
 # ---------- MCP tool descriptions ----------
 tool-list-repos = List all configured sync repositories with their latest sync status
 tool-discover-repos = Scan the first-level subdirectories of the base directory (staging directory) and register the git repositories found: the origin remote becomes the source, all other remotes become backup targets; returns the full repository list after registration
-tool-add-repo = Add or update a sync repository (idempotent by name): when a repository with the same name exists, its source is updated, targets are merged and it is re-registered instead of creating a duplicate entry; syncing pulls from the source into the local base directory as a staging copy (updating LFS and submodules), then pushes to the target repository
+tool-add-repo = Configuration is read-only: returns guidance for setting the repository up yourself (clone into the transfer directory, git remote add backup remotes, then discover_repos and sync_repo)
 tool-add-repo-name = Repository name (also the directory name under the local base directory)
 tool-add-repo-source = Source URL (Git repository URL)
 tool-add-repo-target = Target repository URL (Git repository URL; shorthand for a single targets entry)
-tool-update-repo = Update the configuration of the specified sync repository: rename and change the source URL; when targets is provided it fully replaces the target list (to only add targets use add_repo, which merges)
+tool-update-repo = Configuration is read-only: returns guidance for editing remotes yourself with git remote
 tool-update-repo-id = Repository ID
 tool-update-repo-name = New repository name (optional)
 tool-update-repo-source = New source URL (optional)
 tool-update-repo-targets = Full backup target list (optional; replaces all existing targets when provided)
-tool-remove-repo = Remove the specified sync repository (soft delete): it is hidden from the list and its targets are cleared; the directory under the base directory is not deleted and the repository will not be re-discovered
+tool-remove-repo = Configuration is read-only: returns guidance for unregistering (use stop_syncs to stop syncing)
 tool-remove-repo-id = Repository ID
 tool-sync-repo = Start syncing the specified repository immediately (async; use get_sync_status to check progress)
 tool-sync-repo-id = Repository ID

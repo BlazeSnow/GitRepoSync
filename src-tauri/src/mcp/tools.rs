@@ -9,7 +9,6 @@ use crate::sync;
 use rusqlite::params;
 use serde_json::{json, Value};
 use std::sync::Arc;
-use uuid::Uuid;
 
 const OPERATOR: &str = "mcp";
 
@@ -30,59 +29,17 @@ pub(super) fn tools_list(lang: Lang) -> Value {
             {
                 "name": "add_repo",
                 "description": tr(lang, "tool-add-repo"),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "name": { "type": "string", "description": tr(lang, "tool-add-repo-name") },
-                        "source": { "type": "string", "description": tr(lang, "tool-add-repo-source") },
-                        "target": { "type": "string", "description": tr(lang, "tool-add-repo-target") },
-                        "targets": {
-                            "type": "array",
-                            "description": tr(lang, "tool-add-repo-targets"),
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "remote": { "type": "string" },
-                                    "url": { "type": "string" }
-                                }
-                            }
-                        }
-                    },
-                    "required": ["name", "source", "target"]
-                }
+                "inputSchema": { "type": "object", "properties": {} }
             },
             {
                 "name": "update_repo",
                 "description": tr(lang, "tool-update-repo"),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "id": { "type": "string", "description": tr(lang, "tool-update-repo-id") },
-                        "name": { "type": "string", "description": tr(lang, "tool-update-repo-name") },
-                        "source": { "type": "string", "description": tr(lang, "tool-update-repo-source") },
-                        "targets": {
-                            "type": "array",
-                            "description": tr(lang, "tool-update-repo-targets"),
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "remote": { "type": "string" },
-                                    "url": { "type": "string" }
-                                }
-                            }
-                        }
-                    },
-                    "required": ["id"]
-                }
+                "inputSchema": { "type": "object", "properties": {} }
             },
             {
                 "name": "remove_repo",
                 "description": tr(lang, "tool-remove-repo"),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": { "id": { "type": "string", "description": tr(lang, "tool-remove-repo-id") } },
-                    "required": ["id"]
-                }
+                "inputSchema": { "type": "object", "properties": {} }
             },
             {
                 "name": "sync_repo",
@@ -198,20 +155,6 @@ fn list_logs_value(state: &AppState, limit: i64) -> Result<Value, String> {
     serde_json::to_value(logs).map_err(|e| e.to_string())
 }
 
-/// 按 id 读取完整仓库（含目标状态）并序列化；供 add / update 工具响应复用
-fn repo_value_by_id(state: &AppState, id: &str, lang: Lang) -> Result<Value, String> {
-    let conn = lock(&state.conn);
-    let mut repo = conn
-        .query_row(
-            &format!("SELECT {REPO_COLS} FROM repos WHERE id = ?1"),
-            params![id],
-            repo_from_row,
-        )
-        .map_err(|_| tr(lang, "repo-not-found"))?;
-    crate::state::attach_targets(&conn, std::slice::from_mut(&mut repo));
-    serde_json::to_value(repo).map_err(|e| e.to_string())
-}
-
 pub(super) fn tools_call(
     state: &Arc<AppState>,
     lang: Lang,
@@ -236,259 +179,18 @@ pub(super) fn tools_call(
                 .clamp(1, 1000);
             list_logs_value(state, limit)
         }
-        "add_repo" => {
-            let field = |k: &str| {
-                args.get(k)
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .trim()
-                    .to_string()
+        // 仓库配置只读：三个历史管理工具保留名称作为兼容入口，调用返回
+        // 对应的 git 操作指引（用户自行 clone / git remote 管理远端）
+        "add_repo" | "update_repo" | "remove_repo" => {
+            let base_dir = state
+                .get_setting("base_dir")
+                .unwrap_or_else(crate::state::default_base_dir);
+            let key = match name {
+                "update_repo" => "mcp-help-update-repo",
+                "remove_repo" => "mcp-help-remove-repo",
+                _ => "mcp-help-add-repo",
             };
-            let (rname, source) = (field("name"), field("source"));
-            if rname.is_empty() || source.is_empty() {
-                return Err((-32602, tr(lang, "repo-fields-empty")));
-            }
-            crate::repos::validate_repo_name(&rname, lang).map_err(|e| (-32602, e))?;
-            crate::repos::validate_url(&source, lang).map_err(|e| (-32602, e))?;
-            // 目标：优先 targets 数组 [{remote,url}]；兼容单 target 字符串（远端名 backup）
-            let mut targets: Vec<(String, String)> = args
-                .get("targets")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|t| {
-                            let remote = t.get("remote")?.as_str()?.trim().to_string();
-                            let url = t.get("url")?.as_str()?.trim().to_string();
-                            (!remote.is_empty() && !url.is_empty()).then_some((remote, url))
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            if targets.is_empty() {
-                if let Some(t) = args.get("target").and_then(|v| v.as_str()) {
-                    let t = t.trim();
-                    if !t.is_empty() {
-                        targets.push(("backup".into(), t.to_string()));
-                    }
-                }
-            }
-            if targets.is_empty() {
-                return Err((-32602, tr(lang, "sync-no-targets")));
-            }
-            // upstream 为保留远端名（fork 上游，自动发现排除）：不得作为备份目标
-            if targets
-                .iter()
-                .any(|(remote, _)| remote == discover::RESERVED_TARGET_REMOTE)
-            {
-                return Err((-32602, tr(lang, "repo-target-reserved")));
-            }
-            // 目标 URL 校验：拒绝选项注入与「自己推自己」
-            for (_, url) in &targets {
-                crate::repos::validate_url(url, lang).map_err(|e| (-32602, e))?;
-                if url == &source {
-                    return Err((-32602, tr(lang, "repo-url-same-as-source")));
-                }
-            }
-            // 幂等：同名仓库已存在（含隐藏的）时更新源地址、合并目标并重新登记，
-            // 不再创建重复条目——name 同时是中转目录名与自动发现的身份
-            let existing: Option<String> = {
-                let conn = lock(&state.conn);
-                conn.query_row(
-                    "SELECT id FROM repos WHERE name = ?1",
-                    params![rname],
-                    |r| r.get::<_, String>(0),
-                )
-                .ok()
-            };
-            let created = existing.is_none();
-            let repo_id = match existing {
-                Some(id) => {
-                    let conn = lock(&state.conn);
-                    conn.execute(
-                        "UPDATE repos SET source = ?1, hidden = 0 WHERE id = ?2",
-                        params![source, id],
-                    )
-                    .map_err(|e| (-32602, e.to_string()))?;
-                    for (remote, url) in &targets {
-                        conn.execute(
-                            "INSERT INTO sync_targets (repo_id, remote, url) VALUES (?1, ?2, ?3)
-                             ON CONFLICT(repo_id, remote) DO UPDATE SET url = excluded.url",
-                            params![id, remote, url],
-                        )
-                        .map_err(|e| (-32602, e.to_string()))?;
-                    }
-                    id
-                }
-                None => {
-                    let id = Uuid::new_v4().to_string();
-                    let conn = lock(&state.conn);
-                    conn.execute(
-                        "INSERT INTO repos (id, name, source, target, last_synced, last_status, last_message)
-                         VALUES (?1, ?2, ?3, '', ?4, ?5, ?6)",
-                        params![id, rname, source, None::<i64>, "idle", None::<String>],
-                    )
-                    .map_err(|e| (-32602, e.to_string()))?;
-                    for (remote, url) in &targets {
-                        conn.execute(
-                            "INSERT INTO sync_targets (repo_id, remote, url) VALUES (?1, ?2, ?3)",
-                            params![id, remote, url],
-                        )
-                        .map_err(|e| (-32602, e.to_string()))?;
-                    }
-                    id
-                }
-            };
-            // 目标镜像进本地 config：发现逻辑的集合同步不会再清除
-            crate::git::mirror_targets_to_config(state, &repo_id, &rname);
-            state.add_log(
-                &tr_a(lang, "log-mcp-repo-added", &[("name", &rname)]),
-                OPERATOR,
-            );
-            let mut value = repo_value_by_id(state, &repo_id, lang).map_err(|e| (-32602, e))?;
-            if let Some(obj) = value.as_object_mut() {
-                obj.insert("created".into(), Value::Bool(created));
-            }
-            Ok(value)
-        }
-        "remove_repo" => {
-            let id = args
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            if state.job_active(&id) {
-                return Err((-32602, tr(lang, "repo-syncing")));
-            }
-            // 存在性按 repos 行本身判定：自动发现的仓库可能没有目标，
-            // sync_targets 的删除行数不能作为判定（曾把“无目标仓库”误报为不存在）。
-            // 移除 = 软删除：隐藏并清空目标；基地址内目录不删除、不会被自动发现重新登记，
-            // 与界面删除语义一致
-            let name = {
-                let conn = lock(&state.conn);
-                let name: String = conn
-                    .query_row("SELECT name FROM repos WHERE id = ?1", params![id], |r| r.get(0))
-                    .map_err(|_| (-32602, tr(lang, "repo-not-found")))?;
-                conn.execute("UPDATE repos SET hidden = 1 WHERE id = ?1", params![id])
-                    .map_err(|e| (-32602, e.to_string()))?;
-                conn.execute("DELETE FROM sync_targets WHERE repo_id = ?1", params![id])
-                    .map_err(|e| (-32602, e.to_string()))?;
-                name
-            };
-            state.add_log(
-                &tr_a(lang, "log-mcp-repo-deleted", &[("name", &name)]),
-                OPERATOR,
-            );
-            Ok(json!({ "deleted": true, "id": id, "name": name }))
-        }
-        "update_repo" => {
-            let id = args
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            if state.job_active(&id) {
-                return Err((-32602, tr(lang, "repo-syncing")));
-            }
-            let optional_field = |k: &str| {
-                args.get(k)
-                    .and_then(|v| v.as_str())
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_string)
-            };
-            let name = optional_field("name");
-            let source = optional_field("source");
-            if let Some(n) = &name {
-                crate::repos::validate_repo_name(n, lang).map_err(|e| (-32602, e))?;
-            }
-            if let Some(s) = &source {
-                crate::repos::validate_url(s, lang).map_err(|e| (-32602, e))?;
-            }
-            // targets 提供即整体替换（与界面编辑一致）；仅补充目标请用 add_repo（合并语义）
-            let targets: Option<Vec<(String, String)>> = args
-                .get("targets")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|t| {
-                            let remote = t.get("remote")?.as_str()?.trim().to_string();
-                            let url = t.get("url")?.as_str()?.trim().to_string();
-                            (!remote.is_empty() && !url.is_empty()).then_some((remote, url))
-                        })
-                        .collect()
-                });
-            if let Some(ts) = &targets {
-                if ts.is_empty() {
-                    return Err((-32602, tr(lang, "sync-no-targets")));
-                }
-                // upstream 为保留远端名（fork 上游，自动发现排除）：不得作为备份目标
-                if ts.iter()
-                    .any(|(remote, _)| remote == discover::RESERVED_TARGET_REMOTE)
-                {
-                    return Err((-32602, tr(lang, "repo-target-reserved")));
-                }
-                for (_, url) in ts {
-                    crate::repos::validate_url(url, lang).map_err(|e| (-32602, e))?;
-                }
-            }
-            if name.is_none() && source.is_none() && targets.is_none() {
-                return Err((-32602, tr(lang, "update-repo-no-fields")));
-            }
-            let log_name = {
-                let conn = lock(&state.conn);
-                let (current_name, current_source): (String, String) = conn
-                    .query_row("SELECT name, source FROM repos WHERE id = ?1", params![id], |r| {
-                        Ok((r.get(0)?, r.get(1)?))
-                    })
-                    .map_err(|_| (-32602, tr(lang, "repo-not-found")))?;
-                // 目标等于生效源地址（新传的或既有的）＝自己推自己，拒绝
-                let effective_source = source.clone().unwrap_or(current_source);
-                if let Some(ts) = &targets {
-                    for (_, u) in ts {
-                        if u == &effective_source {
-                            return Err((-32602, tr(lang, "repo-url-same-as-source")));
-                        }
-                    }
-                }
-                // 改名禁止与现有名称冲突（name 唯一，且是自动发现的身份）
-                if let Some(n) = &name {
-                    let dup: i64 = conn
-                        .query_row(
-                            "SELECT COUNT(*) FROM repos WHERE name = ?1 AND id != ?2",
-                            params![n, id],
-                            |r| r.get(0),
-                        )
-                        .unwrap_or(0);
-                    if dup > 0 {
-                        return Err((-32602, tr_a(lang, "repo-name-exists", &[("name", n)])));
-                    }
-                    conn.execute("UPDATE repos SET name = ?1 WHERE id = ?2", params![n, id])
-                        .map_err(|e| (-32602, e.to_string()))?;
-                }
-                if let Some(s) = &source {
-                    conn.execute("UPDATE repos SET source = ?1 WHERE id = ?2", params![s, id])
-                        .map_err(|e| (-32602, e.to_string()))?;
-                }
-                if let Some(ts) = &targets {
-                    conn.execute("DELETE FROM sync_targets WHERE repo_id = ?1", params![id])
-                        .map_err(|e| (-32602, e.to_string()))?;
-                    for (remote, url) in ts {
-                        conn.execute(
-                            "INSERT INTO sync_targets (repo_id, remote, url) VALUES (?1, ?2, ?3)",
-                            params![id, remote, url],
-                        )
-                        .map_err(|e| (-32602, e.to_string()))?;
-                    }
-                }
-                name.unwrap_or(current_name)
-            };
-            // 目标镜像进本地 config（含移除不再作为目标的远端）
-            crate::git::mirror_targets_to_config(state, &id, &log_name);
-            state.add_log(
-                &tr_a(lang, "log-mcp-repo-updated", &[("name", &log_name)]),
-                OPERATOR,
-            );
-            repo_value_by_id(state, &id, lang)
+            Ok(json!(tr_a(lang, key, &[("base_dir", &base_dir)])))
         }
         "sync_repo" => {
             let id = args
@@ -645,6 +347,7 @@ mod tests {
     use super::*;
     use crate::lang::Lang;
     use crate::state::AppState;
+    use uuid::Uuid;
 
     fn open_state() -> (Arc<AppState>, std::path::PathBuf) {
         let root =
@@ -675,149 +378,26 @@ mod tests {
         conn.query_row(sql, params![id], |r| r.get(0)).unwrap()
     }
 
-    /// 同名 add_repo 幂等：更新源地址、按 remote 合并目标，不产生重复条目
-    #[test]
-    fn add_repo_is_idempotent_by_name() {
-        let (state, root) = open_state();
-        let first = call(
-            &state,
-            "add_repo",
-            json!({
-                "name": "demo", "source": "https://src/demo.git",
-                "targets": [{ "remote": "backup", "url": "https://bak/demo.git" }]
-            }),
-        )
-        .unwrap();
-        assert_eq!(first["created"], json!(true));
-        let second = call(
-            &state,
-            "add_repo",
-            json!({
-                "name": "demo", "source": "https://src2/demo.git",
-                "targets": [{ "remote": "gitlab", "url": "https://gl/demo.git" }]
-            }),
-        )
-        .unwrap();
-        assert_eq!(second["created"], json!(false));
-        assert_eq!(second["id"], first["id"], "同名 add_repo 返回同一条目");
-        assert_eq!(second["source"], json!("https://src2/demo.git"));
-        assert_eq!(
-            count(&state, "SELECT COUNT(*) FROM repos WHERE name = ?1", "demo"),
-            1
-        );
-        let id = second["id"].as_str().unwrap();
-        assert_eq!(
-            count(&state, "SELECT COUNT(*) FROM sync_targets WHERE repo_id = ?1", id),
-            2,
-            "目标按 remote 合并：backup + gitlab"
-        );
-        std::fs::remove_dir_all(&root).ok();
-    }
-
-    /// 无目标仓库（自动发现形态）删除必须成功：曾按 sync_targets 删除行数判定而误报不存在
-    #[test]
-    fn remove_repo_succeeds_without_targets() {
-        let (state, root) = open_state();
-        let added = call(
-            &state,
-            "add_repo",
-            json!({
-                "name": "solo", "source": "https://src/solo.git",
-                "targets": [{ "remote": "backup", "url": "https://bak/solo.git" }]
-            }),
-        )
-        .unwrap();
-        let id = added["id"].as_str().unwrap().to_string();
-        {
-            let conn = lock(&state.conn);
-            conn.execute("DELETE FROM sync_targets WHERE repo_id = ?1", params![id])
-                .unwrap();
-        }
-        let removed = call(&state, "remove_repo", json!({ "id": id })).unwrap();
-        assert_eq!(removed["deleted"], json!(true));
-        assert_eq!(removed["name"], json!("solo"));
-        let hidden: i64 = {
-            let conn = lock(&state.conn);
-            conn.query_row("SELECT hidden FROM repos WHERE id = ?1", params![removed["id"].as_str().unwrap()], |r| r.get(0))
-                .unwrap()
-        };
-        assert_eq!(hidden, 1, "移除为软删除（隐藏）");
-        // 不存在的 id 报“仓库不存在”
-        assert_eq!(
-            call(&state, "remove_repo", json!({ "id": "nope" })).unwrap_err().0,
-            -32602
-        );
-        std::fs::remove_dir_all(&root).ok();
-    }
-
-    /// update_repo：targets 提供即整体替换，支持改名；空 targets 与空参数拒绝
-    #[test]
-    fn update_repo_replaces_targets_and_renames() {
-        let (state, root) = open_state();
-        let added = call(
-            &state,
-            "add_repo",
-            json!({
-                "name": "old", "source": "https://src/old.git",
-                "targets": [
-                    { "remote": "a", "url": "https://a/old.git" },
-                    { "remote": "b", "url": "https://b/old.git" }
-                ]
-            }),
-        )
-        .unwrap();
-        let id = added["id"].as_str().unwrap();
-        let updated = call(
-            &state,
-            "update_repo",
-            json!({
-                "id": id, "name": "new",
-                "targets": [{ "remote": "c", "url": "https://c/new.git" }]
-            }),
-        )
-        .unwrap();
-        assert_eq!(updated["name"], json!("new"));
-        let targets = updated["targets"].as_array().unwrap();
-        assert_eq!(targets.len(), 1, "targets 提供即整体替换");
-        assert_eq!(targets[0]["remote"], json!("c"));
-        assert!(call(&state, "update_repo", json!({ "id": id, "targets": [] })).is_err());
-        // upstream 为保留远端名（fork 上游）：整体替换时拒绝
-        assert!(call(
-            &state,
-            "update_repo",
-            json!({ "id": id, "targets": [{ "remote": "upstream", "url": "https://orig/new.git" }] })
-        )
-        .is_err());
-        assert!(call(&state, "update_repo", json!({ "id": id })).is_err());
-        assert_eq!(
-            call(&state, "update_repo", json!({ "id": "nope", "source": "s" }))
-                .unwrap_err()
-                .0,
-            -32602
-        );
-        std::fs::remove_dir_all(&root).ok();
-    }
-
-    /// list_logs：按时间倒序返回操作日志，limit 生效；只读操作自身不写入日志
+    /// list_logs：按时间倒序返回操作日志，limit 生效（直接插入日志行：
+    /// 仓库变更类 MCP 工具已只读化，不再产生日志）
     #[test]
     fn list_logs_returns_recent_entries() {
         let (state, root) = open_state();
-        for name in ["l1", "l2"] {
-            call(
-                &state,
-                "add_repo",
-                json!({
-                    "name": name, "source": "https://src/x.git",
-                    "targets": [{ "remote": "b", "url": "https://b/x.git" }]
-                }),
-            )
-            .unwrap();
+        {
+            let conn = lock(&state.conn);
+            for (i, name) in ["l1", "l2"].iter().enumerate() {
+                conn.execute(
+                    "INSERT INTO operation_logs (action, operator, created_at) VALUES (?1, 'mcp', ?2)",
+                    params![format!("添加仓库「{name}」"), i as i64],
+                )
+                .unwrap();
+            }
         }
         let logs = call(&state, "list_logs", json!({ "limit": 1 })).unwrap();
         let arr = logs.as_array().unwrap();
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0]["operator"], json!("mcp"));
-        assert_eq!(arr[0]["action"].as_str().unwrap().contains("l2"), true, "倒序：最新操作在前");
+        assert_eq!(arr[0]["action"], json!("添加仓库「l2」"), "倒序：最新操作在前");
         let all = call(&state, "list_logs", json!({})).unwrap();
         assert!(all.as_array().unwrap().len() >= 2);
         // limit 钳制到 [1, 1000]，非法值不报错
@@ -826,27 +406,10 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
-    /// 工具参数校验与 base_dir 往返（~ 展开为完整路径）
+    /// base_dir 往返（~ 展开为完整路径）与未知工具
     #[test]
-    fn mcp_tools_validation_and_base_dir_roundtrip() {
+    fn mcp_base_dir_roundtrip() {
         let (state, root) = open_state();
-        // 参数校验：缺源地址 / 无目标 / 未知工具均拒绝
-        assert_eq!(
-            call(&state, "add_repo", json!({ "name": "a", "source": "" })).unwrap_err().0,
-            -32602
-        );
-        assert!(
-            call(&state, "add_repo", json!({ "name": "a", "source": "s" })).is_err(),
-            "没有任何目标时拒绝"
-        );
-        // upstream 为保留远端名（fork 上游）：拒绝作为备份目标
-        assert!(call(
-            &state,
-            "add_repo",
-            json!({ "name": "f", "source": "s",
-                    "targets": [{ "remote": "upstream", "url": "https://orig/f.git" }] })
-        )
-        .is_err());
         assert!(call(&state, "nope", json!({})).is_err(), "未知工具");
         // base_dir 往返：~ 输入展开为完整路径
         call(&state, "set_base_dir", json!({ "base_dir": "~/repo" })).unwrap();
@@ -855,6 +418,37 @@ mod tests {
         assert_eq!(got["base_dir"], json!(home.join("repo").to_string_lossy()));
         // 空值拒绝
         assert!(call(&state, "set_base_dir", json!({ "base_dir": "  " })).is_err());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 仓库配置只读：add_repo / update_repo / remove_repo 保留名称作为
+    /// 兼容入口，调用返回对应的 git 操作指引且不改任何数据
+    #[test]
+    fn mcp_repo_tools_return_help() {
+        let (state, root) = open_state();
+        for tool in ["add_repo", "update_repo", "remove_repo"] {
+            let envelope = tools_call(
+                &state,
+                Lang::Zh,
+                &json!({ "name": tool, "arguments": { "id": "x", "name": "x" } }),
+            )
+            .unwrap();
+            assert_eq!(envelope["isError"], json!(false), "{tool} 应成功返回指引");
+            let text = envelope["content"][0]["text"].as_str().unwrap();
+            assert!(text.contains("sync_repo"), "{tool} 指引应引导使用同步工具: {text}");
+            if tool != "remove_repo" {
+                // 退登记指引不涉及远端操作
+                assert!(text.contains("git remote"), "{tool} 指引应包含 git 操作说明: {text}");
+            }
+        }
+        // 未产生任何数据变更
+        let repos = call(&state, "list_repos", json!({})).unwrap();
+        assert_eq!(repos.as_array().unwrap().len(), 0);
+        let jobs: i64 = {
+            let conn = lock(&state.conn);
+            conn.query_row("SELECT COUNT(*) FROM sync_jobs", [], |r| r.get(0)).unwrap()
+        };
+        assert_eq!(jobs, 0);
         std::fs::remove_dir_all(&root).ok();
     }
 
@@ -949,172 +543,6 @@ mod tests {
                 .unwrap()
         };
         assert_eq!(jobs, 0, "未产生真实同步任务");
-        std::fs::remove_dir_all(&root).ok();
-    }
-
-    /// add_repo / update_repo 拒绝非法仓库名（路径分隔符、盘符冒号、. 与 ..）
-    #[test]
-    fn mcp_rejects_invalid_repo_names() {
-        let (state, root) = open_state();
-        for bad in ["../evil", "a/b", "a\\b", "C:evil", ".", ".."] {
-            assert!(
-                call(
-                    &state,
-                    "add_repo",
-                    json!({
-                        "name": bad, "source": "https://src/x.git",
-                        "targets": [{ "remote": "backup", "url": "https://bak/x.git" }]
-                    }),
-                )
-                .is_err(),
-                "add_repo 应拒绝非法仓库名 {bad}"
-            );
-        }
-        // update_repo 改名同样拒绝
-        let added = call(
-            &state,
-            "add_repo",
-            json!({
-                "name": "demo", "source": "https://src/demo.git",
-                "targets": [{ "remote": "backup", "url": "https://bak/demo.git" }]
-            }),
-        )
-        .unwrap();
-        let id = added["id"].as_str().unwrap();
-        assert!(
-            call(&state, "update_repo", json!({ "id": id, "name": "../evil" })).is_err(),
-            "update_repo 应拒绝非法改名"
-        );
-        std::fs::remove_dir_all(&root).ok();
-    }
-
-    /// add_repo / update_repo 拒绝非法 URL：以 - 开头（git 选项注入）与
-    /// 目标等于源地址（update 未传 source 时按既有源校验）
-    #[test]
-    fn mcp_rejects_invalid_urls() {
-        let (state, root) = open_state();
-        // 源地址以 - 开头
-        assert!(call(
-            &state,
-            "add_repo",
-            json!({
-                "name": "a", "source": "-https://x",
-                "targets": [{ "remote": "backup", "url": "https://bak/a.git" }]
-            }),
-        )
-        .is_err());
-        // 目标以 - 开头
-        assert!(call(
-            &state,
-            "add_repo",
-            json!({
-                "name": "a", "source": "https://src/a.git",
-                "targets": [{ "remote": "backup", "url": "-x" }]
-            }),
-        )
-        .is_err());
-        // 目标等于源（自己推自己）
-        assert!(call(
-            &state,
-            "add_repo",
-            json!({
-                "name": "a", "source": "https://src/a.git",
-                "targets": [{ "remote": "backup", "url": "https://src/a.git" }]
-            }),
-        )
-        .is_err());
-        // update_repo：源与目标校验（未传 source 时按既有源校验）
-        let added = call(
-            &state,
-            "add_repo",
-            json!({
-                "name": "demo", "source": "https://src/demo.git",
-                "targets": [{ "remote": "backup", "url": "https://bak/demo.git" }]
-            }),
-        )
-        .unwrap();
-        let id = added["id"].as_str().unwrap();
-        assert!(call(&state, "update_repo", json!({ "id": id, "source": "-x" })).is_err());
-        assert!(
-            call(
-                &state,
-                "update_repo",
-                json!({
-                    "id": id,
-                    "targets": [{ "remote": "backup", "url": "https://src/demo.git" }]
-                }),
-            )
-            .is_err(),
-            "目标等于既有源地址应拒绝"
-        );
-        std::fs::remove_dir_all(&root).ok();
-    }
-
-    /// add_repo / update_repo 将目标镜像进本地 config；自动发现的
-    /// 远端集合同步不再清除这些目标（B5 回归）
-    #[test]
-    fn add_and_update_repo_mirror_targets_to_config() {
-        let (state, root) = open_state();
-        let base = root.join("base");
-        let demo = base.join("demo");
-        std::fs::create_dir_all(&demo).unwrap();
-        let git = |args: &[&str]| {
-            let s = std::process::Command::new("git")
-                .args(args)
-                .env("GIT_TERMINAL_PROMPT", "0")
-                .current_dir(&demo)
-                .status()
-                .unwrap();
-            assert!(s.success(), "git {:?} 执行失败", args);
-        };
-        git(&["init", "-q", "-b", "main"]);
-        git(&["remote", "add", "origin", "https://github.com/u/demo.git"]);
-        state.set_setting("base_dir", &base.to_string_lossy());
-
-        let added = call(
-            &state,
-            "add_repo",
-            json!({
-                "name": "demo", "source": "https://src/demo.git",
-                "targets": [{ "remote": "backup", "url": "https://bak/demo.git" }]
-            }),
-        )
-        .unwrap();
-        let remotes = crate::discover::parse_remote_urls(&demo).unwrap();
-        assert!(
-            remotes.iter().any(|(n, u)| n == "backup" && u == "https://bak/demo.git"),
-            "add_repo 后 config 应包含目标远端: {remotes:?}"
-        );
-
-        // 整体替换：backup 从 config 移除、gitlab 补进
-        let id = added["id"].as_str().unwrap().to_string();
-        call(
-            &state,
-            "update_repo",
-            json!({
-                "id": id,
-                "targets": [{ "remote": "gitlab", "url": "https://gl/demo.git" }]
-            }),
-        )
-        .unwrap();
-        let remotes = crate::discover::parse_remote_urls(&demo).unwrap();
-        assert!(
-            remotes.iter().any(|(n, u)| n == "gitlab" && u == "https://gl/demo.git"),
-            "update_repo 后 config 应包含新目标: {remotes:?}"
-        );
-        assert!(!remotes.iter().any(|(n, _)| n == "backup"), "被替换的目标应从 config 移除");
-
-        // 发现以 config 为准：DB 目标为 gitlab 且不再被清除
-        let repos = call(&state, "discover_repos", json!({})).unwrap();
-        let demo_row = repos
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|r| r["name"] == json!("demo"))
-            .unwrap();
-        let targets = demo_row["targets"].as_array().unwrap();
-        assert_eq!(targets.len(), 1, "发现后目标保持: {targets:?}");
-        assert_eq!(targets[0]["remote"], json!("gitlab"));
         std::fs::remove_dir_all(&root).ok();
     }
 

@@ -74,7 +74,6 @@ fn main() {
             auth::change_password,
             repos::list_repos,
             repos::discover_repos,
-            repos::save_repo,
             repos::delete_repo,
             repos::open_repo_dir,
             sync::start_sync,

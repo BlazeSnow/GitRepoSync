@@ -1,5 +1,7 @@
-//! 仓库 CRUD 的 Tauri 命令：列表（含自动发现）、保存、删除。
-//! 同步命令见 sync.rs；git 流水线见 git.rs；发现逻辑见 discover.rs。
+//! 仓库的 Tauri 命令：列表（含自动发现）、隐藏（软删除）、打开目录。
+//! 仓库配置只读：源与目标由 .git/config 派生（origin 为源、其余非
+//! upstream 远端为目标），由用户自行用 git remote 管理，软件不代管。
+//! 同步任务见 sync.rs；发现逻辑见 discover.rs。
 
 use crate::auth::require_session;
 use crate::discover::discover;
@@ -9,7 +11,6 @@ use rusqlite::params;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::State;
-use uuid::Uuid;
 
 #[tauri::command]
 pub fn list_repos(state: State<'_, Arc<AppState>>, token: String) -> Result<Vec<Repo>, String> {
@@ -27,182 +28,6 @@ pub fn list_repos(state: State<'_, Arc<AppState>>, token: String) -> Result<Vec<
         .map_err(|e| e.to_string())?;
     crate::state::attach_targets(&conn, &mut repos);
     Ok(repos)
-}
-
-/// 仓库名合法性：name 同时是中转目录名（{基地址}/{name}）与自动发现的
-/// 身份——拒绝路径分隔符与盘符冒号（Windows 下 `C:xxx` 会被路径 join
-/// 语义带偏，防中转目录逃逸基地址），以及 . 与 ..
-pub(crate) fn validate_repo_name(name: &str, lang: Lang) -> Result<(), String> {
-    if name.contains('/')
-        || name.contains('\\')
-        || name.contains(':')
-        || name == "."
-        || name == ".."
-    {
-        return Err(tr(lang, "repo-name-invalid"));
-    }
-    Ok(())
-}
-
-/// URL 合法性：拒绝以 - 开头（会被 git 解析为命令行选项而非位置参数，
-/// 造成选项注入与难排查的失败）
-pub(crate) fn validate_url(url: &str, lang: Lang) -> Result<(), String> {
-    if url.starts_with('-') {
-        return Err(tr(lang, "repo-url-invalid"));
-    }
-    Ok(())
-}
-
-/// save_repo 的单个备份目标输入
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TargetInput {
-    pub remote: String,
-    pub url: String,
-}
-
-#[tauri::command]
-pub fn save_repo(
-    state: State<'_, Arc<AppState>>,
-    token: String,
-    id: Option<String>,
-    name: String,
-    source: String,
-    targets: Vec<TargetInput>,
-) -> Result<Repo, String> {
-    let username = require_session(&state, &token)?;
-    let lang = gui_lang();
-    let name = name.trim().to_string();
-    let source = source.trim().to_string();
-    if name.is_empty() || source.is_empty() {
-        return Err(tr(lang, "repo-fields-empty"));
-    }
-    validate_repo_name(&name, lang)?;
-    validate_url(&source, lang)?;
-    // 名称唯一：name 是中转目录名与自动发现的身份（数据库层有唯一索引兜底），
-    // 此处先给出可读提示（含隐藏行，改名不得与任何现有行冲突）
-    {
-        let conn = lock(&state.conn);
-        let dup: i64 = if let Some(rid) = &id {
-            conn.query_row(
-                "SELECT COUNT(*) FROM repos WHERE name = ?1 AND id != ?2",
-                params![name, rid],
-                |r| r.get(0),
-            )
-            .unwrap_or(0)
-        } else {
-            conn.query_row(
-                "SELECT COUNT(*) FROM repos WHERE name = ?1",
-                params![name],
-                |r| r.get(0),
-            )
-            .unwrap_or(0)
-        };
-        if dup > 0 {
-            return Err(tr_a(lang, "repo-name-exists", &[("name", &name)]));
-        }
-    }
-    // 目标清洗：去空行、remote/url 去空白
-    let targets: Vec<TargetInput> = targets
-        .into_iter()
-        .map(|t| TargetInput {
-            remote: t.remote.trim().to_string(),
-            url: t.url.trim().to_string(),
-        })
-        .filter(|t| !t.remote.is_empty() && !t.url.is_empty())
-        .collect();
-    // 目标 URL 校验：拒绝选项注入与「自己推自己」
-    for t in &targets {
-        validate_url(&t.url, lang)?;
-        if t.url == source {
-            return Err(tr(lang, "repo-url-same-as-source"));
-        }
-    }
-    // upstream 为保留远端名（fork 上游，自动发现排除）：不得作为备份目标，
-    // 否则会在下次发现时被静默移除
-    if targets
-        .iter()
-        .any(|t| t.remote == crate::discover::RESERVED_TARGET_REMOTE)
-    {
-        return Err(tr(lang, "repo-target-reserved"));
-    }
-    let repo = {
-        let conn = lock(&state.conn);
-        if let Some(rid) = &id {
-            let updated = conn
-                .execute(
-                    "UPDATE repos SET name = ?1, source = ?2 WHERE id = ?3",
-                    params![name, source, rid],
-                )
-                .map_err(|e| e.to_string())?;
-            if updated == 0 {
-                return Err(tr(lang, "repo-not-found"));
-            }
-            conn.execute("DELETE FROM sync_targets WHERE repo_id = ?1", params![rid])
-                .map_err(|e| e.to_string())?;
-            for t in &targets {
-                conn.execute(
-                    "INSERT INTO sync_targets (repo_id, remote, url) VALUES (?1, ?2, ?3)",
-                    params![rid, t.remote, t.url],
-                )
-                .map_err(|e| e.to_string())?;
-            }
-            conn.query_row(
-                &format!("SELECT {REPO_COLS} FROM repos WHERE id = ?1"),
-                params![rid],
-                repo_from_row,
-            )
-            .map_err(|e| e.to_string())?
-        } else {
-            let repo = Repo {
-                id: Uuid::new_v4().to_string(),
-                name: name.clone(),
-                source,
-                last_synced: None,
-                last_status: "idle".into(),
-                last_message: None,
-                targets: Vec::new(),
-            };
-            conn.execute(
-                "INSERT INTO repos (id, name, source, last_synced, last_status, last_message)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
-                    repo.id,
-                    repo.name,
-                    repo.source,
-                    repo.last_synced,
-                    repo.last_status,
-                    repo.last_message
-                ],
-            )
-            .map_err(|e| e.to_string())?;
-            for t in &targets {
-                conn.execute(
-                    "INSERT INTO sync_targets (repo_id, remote, url) VALUES (?1, ?2, ?3)",
-                    params![repo.id, t.remote, t.url],
-                )
-                .map_err(|e| e.to_string())?;
-            }
-            repo
-        }
-    };
-    // 目标镜像到本地 config：自动发现的远端集合同步以 config 为准，
-    // 不镜像则 DB-only 的目标会在下次发现时被清除（目录未克隆时跳过，
-    // 由流水线克隆后补写）
-    crate::git::mirror_targets_to_config(state.inner(), &repo.id, &repo.name);
-    state.add_log(
-        &tr_a(
-            lang,
-            if id.is_some() {
-                "log-repo-edited"
-            } else {
-                "log-repo-added"
-            },
-            &[("name", &repo.name)],
-        ),
-        &username,
-    );
-    Ok(repo)
 }
 
 #[tauri::command]
@@ -302,176 +127,10 @@ mod tests {
         assert!(!d.starts_with('~'));
     }
 
-    /// save_repo 拒绝非法仓库名（路径分隔符、盘符冒号、. 与 ..）——
-    /// 防止中转目录逃逸基地址；合法名不受影响
-    #[test]
-    fn save_repo_rejects_invalid_names() {
-        use tauri::Manager;
-
-        let (app, state, root) = open_mock_app("badname");
-        let st = app.state::<Arc<AppState>>();
-        insert_session(state.as_ref(), "tok");
-        for bad in ["../evil", "a/b", "a\\b", "C:evil", ".", ".."] {
-            assert!(
-                save_repo(
-                    st.clone(),
-                    "tok".into(),
-                    None,
-                    bad.into(),
-                    "https://src/x.git".into(),
-                    vec![TargetInput { remote: "backup".into(), url: "https://bak/x.git".into() }],
-                )
-                .is_err(),
-                "应拒绝非法仓库名 {bad}"
-            );
-        }
-        assert!(save_repo(
-            st.clone(),
-            "tok".into(),
-            None,
-            "normal-name".into(),
-            "https://src/x.git".into(),
-            vec![TargetInput { remote: "backup".into(), url: "https://bak/x.git".into() }],
-        )
-        .is_ok());
-        drop(st);
-        drop(app);
-        std::fs::remove_dir_all(&root).ok();
-    }
-
-    /// save_repo 拒绝非法 URL：以 - 开头（git 选项注入）与目标等于源
-    /// 地址（自己推自己）
-    #[test]
-    fn save_repo_rejects_invalid_urls() {
-        use tauri::Manager;
-
-        let (app, state, root) = open_mock_app("badurl");
-        let st = app.state::<Arc<AppState>>();
-        insert_session(state.as_ref(), "tok");
-        // 源地址以 - 开头
-        assert!(save_repo(
-            st.clone(),
-            "tok".into(),
-            None,
-            "demo".into(),
-            "-https://x".into(),
-            vec![TargetInput { remote: "backup".into(), url: "https://bak/demo.git".into() }],
-        )
-        .is_err());
-        // 目标以 - 开头
-        assert!(save_repo(
-            st.clone(),
-            "tok".into(),
-            None,
-            "demo".into(),
-            "https://src/demo.git".into(),
-            vec![TargetInput { remote: "backup".into(), url: "-x".into() }],
-        )
-        .is_err());
-        // 目标等于源（自己推自己）
-        assert!(save_repo(
-            st.clone(),
-            "tok".into(),
-            None,
-            "demo".into(),
-            "https://src/demo.git".into(),
-            vec![TargetInput { remote: "backup".into(), url: "https://src/demo.git".into() }],
-        )
-        .is_err());
-        // 合法 URL 正常通过
-        assert!(save_repo(
-            st.clone(),
-            "tok".into(),
-            None,
-            "demo".into(),
-            "https://src/demo.git".into(),
-            vec![TargetInput { remote: "backup".into(), url: "https://bak/demo.git".into() }],
-        )
-        .is_ok());
-        drop(st);
-        drop(app);
-        std::fs::remove_dir_all(&root).ok();
-    }
-
-    /// save_repo 将目标镜像进本地 config（存在的中转目录）：
-    /// 新增目标补进 config、编辑整体替换时移除不再作为目标的远端
-    #[test]
-    fn save_repo_mirrors_targets_to_local_config() {
-        use tauri::Manager;
-
-        let (app, state, root) = open_mock_app("mirror");
-        let st = app.state::<Arc<AppState>>();
-        insert_session(state.as_ref(), "tok");
-        let base = root.join("base");
-        let demo = base.join("demo");
-        std::fs::create_dir_all(&demo).unwrap();
-        let git = |args: &[&str]| {
-            let s = std::process::Command::new("git")
-                .args(args)
-                .env("GIT_TERMINAL_PROMPT", "0")
-                .current_dir(&demo)
-                .status()
-                .unwrap();
-            assert!(s.success(), "git {:?} 执行失败", args);
-        };
-        git(&["init", "-q", "-b", "main"]);
-        git(&["remote", "add", "origin", "https://github.com/u/demo.git"]);
-        state.set_setting("base_dir", &base.to_string_lossy());
-
-        // 新增：两个目标镜像进 config
-        let repo = save_repo(
-            st.clone(),
-            "tok".into(),
-            None,
-            "demo".into(),
-            "https://src/demo.git".into(),
-            vec![
-                TargetInput { remote: "backup".into(), url: "https://bak/demo.git".into() },
-                TargetInput { remote: "extra".into(), url: "https://extra/demo.git".into() },
-            ],
-        )
-        .unwrap();
-        let remotes = crate::discover::parse_remote_urls(&demo).unwrap();
-        let url = |name: &str| remotes.iter().find(|(n, _)| n == name).map(|(_, u)| u.clone());
-        assert_eq!(url("backup").as_deref(), Some("https://bak/demo.git"));
-        assert_eq!(url("extra").as_deref(), Some("https://extra/demo.git"));
-        assert_eq!(
-            url("origin").as_deref(),
-            Some("https://github.com/u/demo.git"),
-            "origin 不动"
-        );
-
-        // 编辑整体替换：extra 从 config 移除、backup 更新 URL
-        save_repo(
-            st.clone(),
-            "tok".into(),
-            Some(repo.id.clone()),
-            "demo".into(),
-            "https://src/demo.git".into(),
-            vec![TargetInput { remote: "backup".into(), url: "https://bak2/demo.git".into() }],
-        )
-        .unwrap();
-        let remotes = crate::discover::parse_remote_urls(&demo).unwrap();
-        let url = |name: &str| remotes.iter().find(|(n, _)| n == name).map(|(_, u)| u.clone());
-        assert_eq!(url("backup").as_deref(), Some("https://bak2/demo.git"));
-        assert!(url("extra").is_none(), "整体替换后不再作为目标的远端应移除");
-        assert_eq!(
-            url("origin").as_deref(),
-            Some("https://github.com/u/demo.git"),
-            "origin 不动"
-        );
-
-        drop(st);
-        drop(app);
-        std::fs::remove_dir_all(&root).ok();
-    }
-
     /// open_repo_dir 的目录解析：存在返回路径、缺失与未知 id 报错
     /// （只测解析，不实际拉起文件管理器）
     #[test]
     fn resolve_repo_dir_checks_existence() {
-        use crate::state::testutil::open_mock_app;
-
         let (app, state, root) = open_mock_app("opendir");
         let base = root.join("base");
         std::fs::create_dir_all(base.join("demo")).unwrap();
@@ -499,94 +158,53 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
-    /// 命令层：新增（目标清洗）、重名拒绝、编辑整体替换目标、软删除后列表不可见、无效令牌拒绝
+    /// delete_repo：有排队/运行中同步任务时拒绝；软删除后列表不可见且
+    /// 重复删除幂等；无效令牌拒绝
     #[test]
-    fn save_list_delete_repo_commands() {
+    fn delete_repo_hides_and_guards() {
         use tauri::Manager;
-        let (app, _state, root) = open_mock_app("repos");
+
+        let (app, state, root) = open_mock_app("repos");
         let st = app.state::<Arc<AppState>>();
-        insert_session(_state.as_ref(), "tok");
-
-        // 新增：空目标行被清洗，列表可见且目标已附加
-        let repo = save_repo(
-            st.clone(),
-            "tok".into(),
-            None,
-            "demo".into(),
-            "https://src/demo.git".into(),
-            vec![
-                TargetInput { remote: "backup".into(), url: "https://bak/demo.git".into() },
-                TargetInput { remote: "  ".into(), url: "https://ignored.git".into() },
-            ],
-        )
-        .unwrap();
-        let list = list_repos(st.clone(), "tok".into()).unwrap();
-        assert_eq!(list.len(), 1);
-        assert_eq!(list[0].targets.len(), 1, "空白目标行应被清洗");
-        assert_eq!(list[0].targets[0].remote, "backup");
-
-        // 重名（含与其他可见行重名）拒绝
-        assert!(save_repo(
-            st.clone(),
-            "tok".into(),
-            None,
-            "demo".into(),
-            "https://src/other.git".into(),
-            vec![],
-        )
-        .is_err());
-
-        // upstream 为保留远端名（fork 上游）：拒绝作为备份目标
-        assert!(save_repo(
-            st.clone(),
-            "tok".into(),
-            None,
-            "fork".into(),
-            "https://src/fork.git".into(),
-            vec![TargetInput {
-                remote: "upstream".into(),
-                url: "https://orig/fork.git".into(),
-            }],
-        )
-        .is_err());
-
-        // 编辑：改名并整体替换目标列表
-        let updated = save_repo(
-            st.clone(),
-            "tok".into(),
-            Some(repo.id.clone()),
-            "demo2".into(),
-            "https://src/demo.git".into(),
-            vec![
-                TargetInput { remote: "a".into(), url: "https://a.git".into() },
-                TargetInput { remote: "b".into(), url: "https://b.git".into() },
-            ],
-        )
-        .unwrap();
-        assert_eq!(updated.name, "demo2");
-        let list = list_repos(st.clone(), "tok".into()).unwrap();
-        assert_eq!(list[0].targets.len(), 2, "编辑应整体替换目标");
-
-        // 有排队/运行中同步任务的仓库拒绝删除（跨进程任务表互斥）
+        insert_session(state.as_ref(), "tok");
         {
-            let conn = lock(&_state.conn);
+            let conn = lock(&state.conn);
             conn.execute(
-                "INSERT INTO sync_jobs (repo_id, operator, lang, state, created_at)
-                 VALUES (?1, 'mcp', 'zh', 'queued', 0)",
-                params![repo.id],
+                "INSERT INTO repos (id, name, source) VALUES ('r1', 'demo', 'https://src/demo.git')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO sync_targets (repo_id, remote, url) VALUES ('r1', 'backup', 'https://bak/demo.git')",
+                [],
             )
             .unwrap();
         }
-        assert!(delete_repo(st.clone(), "tok".into(), repo.id.clone()).is_err());
+        let list = || -> Vec<Repo> {
+            list_repos(st.clone(), "tok".into()).unwrap()
+        };
+        assert_eq!(list().len(), 1);
+
+        // 有排队/运行中同步任务的仓库拒绝删除（跨进程任务表互斥）
         {
-            let conn = lock(&_state.conn);
+            let conn = lock(&state.conn);
+            conn.execute(
+                "INSERT INTO sync_jobs (repo_id, operator, lang, state, created_at)
+                 VALUES ('r1', 'mcp', 'zh', 'queued', 0)",
+                [],
+            )
+            .unwrap();
+        }
+        assert!(delete_repo(st.clone(), "tok".into(), "r1".into()).is_err());
+        {
+            let conn = lock(&state.conn);
             conn.execute("DELETE FROM sync_jobs", []).unwrap();
         }
 
         // 软删除：列表不可见；重复删除幂等成功（行仍存在只是隐藏）
-        delete_repo(st.clone(), "tok".into(), repo.id.clone()).unwrap();
-        assert!(list_repos(st.clone(), "tok".into()).unwrap().is_empty());
-        delete_repo(st.clone(), "tok".into(), repo.id).unwrap();
+        delete_repo(st.clone(), "tok".into(), "r1".into()).unwrap();
+        assert!(list().is_empty());
+        delete_repo(st.clone(), "tok".into(), "r1".into()).unwrap();
 
         // 无效令牌拒绝
         assert!(list_repos(st.clone(), "bad-token".into()).is_err());

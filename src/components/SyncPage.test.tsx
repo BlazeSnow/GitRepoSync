@@ -10,7 +10,6 @@ vi.mock("@/lib/api", () => ({
     listRepos: vi.fn(),
     startSync: vi.fn(),
     stopSync: vi.fn(),
-    saveRepo: vi.fn(),
     deleteRepo: vi.fn(),
     openRepoDir: vi.fn(),
   },
@@ -194,12 +193,12 @@ it("右键表格行弹出菜单：立即同步、连续右键换行切换、点�
   render(<SyncPage token="tok" />);
   const alpha = await screen.findByText("alpha");
 
-  // 右键行 → 菜单出现（编辑 / 打开目录 / 开始同步 / 删除），各项带图标
+  // 右键行 → 菜单出现（详情 / 打开目录 / 开始同步 / 删除），各项带图标
   fireEvent.contextMenu(alpha);
   const menuEl = document.querySelector(".bg-popover") as HTMLElement;
   const menuButtons = Array.from(menuEl.querySelectorAll("button"));
   expect(menuButtons.map((b) => b.textContent)).toEqual([
-    "编辑仓库",
+    "详情",
     "打开目录",
     "开始同步",
     "删除",
@@ -218,22 +217,25 @@ it("右键表格行弹出菜单：立即同步、连续右键换行切换、点�
   await waitFor(() => expect(api.startSync).toHaveBeenCalledWith("tok", ["a"]));
 
   // 菜单已随点击关闭
-  expect(screen.queryByRole("button", { name: "编辑仓库" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "详情" })).not.toBeInTheDocument();
 
   // 再次右键 alpha 打开菜单，随后直接右键 beta：菜单切换到 beta 而非消失
   // （回归：openMenu 阻止冒泡，window 的关闭监听不得清空新菜单）
   fireEvent.contextMenu(screen.getByText("alpha"));
-  expect(screen.getByRole("button", { name: "编辑仓库" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "详情" })).toBeInTheDocument();
   fireEvent.contextMenu(screen.getByText("beta"));
-  fireEvent.click(screen.getByRole("button", { name: "编辑仓库" }));
-  expect(await screen.findByLabelText("仓库名称")).toHaveValue("beta");
-  fireEvent.click(screen.getByRole("button", { name: "取消" }));
+  fireEvent.click(screen.getByRole("button", { name: "详情" }));
+  // 只读详情弹窗：展示 beta，无输入框
+  expect(await screen.findByRole("dialog")).toBeInTheDocument();
+  expect(screen.getAllByText("beta").length).toBeGreaterThan(0);
+  expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "关闭" }));
 
   // 左键点击菜单外关闭
   fireEvent.contextMenu(screen.getByText("alpha"));
-  expect(screen.getByRole("button", { name: "编辑仓库" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "详情" })).toBeInTheDocument();
   fireEvent.click(document.body);
-  expect(screen.queryByRole("button", { name: "编辑仓库" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "详情" })).not.toBeInTheDocument();
 });
 
 it("表头/空白区右键仅阻止默认行为，不弹出菜单", async () => {
@@ -245,7 +247,7 @@ it("表头/空白区右键仅阻止默认行为，不弹出菜单", async () => 
 
   // 表头右键：容器 handler 阻止原生菜单，且无自定义菜单出现
   fireEvent.contextMenu(screen.getByText("仓库"));
-  expect(screen.queryByRole("button", { name: "编辑仓库" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "详情" })).not.toBeInTheDocument();
   expect(container.querySelector(".bg-popover")).toBeNull();
 });
 
@@ -453,7 +455,7 @@ it("行悬停提示为结构化摘要：整体状态时间 + 各目标详情，�
   expect(unconfTitle).not.toContain("成功");
 });
 
-it("编辑弹窗内删除仓库：右键编辑 → 删除仓库 → 确认后调用 deleteRepo", async () => {
+it("详情弹窗内删除仓库：右键详情 → 删除仓库 → 确认后调用 deleteRepo", async () => {
   vi.mocked(api.discoverRepos).mockResolvedValue([repo({ targets: [backupTarget] })]);
   vi.mocked(api.listRepos).mockResolvedValue([]);
   vi.mocked(api.deleteRepo).mockResolvedValue(undefined);
@@ -464,9 +466,9 @@ it("编辑弹窗内删除仓库：右键编辑 → 删除仓库 → 确认后调
     </ToastProvider>,
   );
 
-  // 右键行打开菜单，进入编辑弹窗
+  // 右键行打开菜单，进入只读详情弹窗
   fireEvent.contextMenu(await screen.findByText("demo"));
-  fireEvent.click(screen.getByRole("button", { name: "编辑仓库" }));
+  fireEvent.click(screen.getByRole("button", { name: "详情" }));
 
   // 弹窗内删除 → 确认弹窗 → 确认
   fireEvent.click(await screen.findByRole("button", { name: "删除仓库" }));

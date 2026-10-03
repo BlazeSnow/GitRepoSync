@@ -63,8 +63,9 @@ pub(crate) fn parse_remote_urls(repo_dir: &Path) -> Option<Vec<(String, String)>
 }
 
 /// 扫描基地址下的一级子目录，自动登记未入库的 git 仓库：
-/// origin 远端作为源地址、其余全部远端作为备份目标；
-/// 已登记的仓库仅补填空地址与同步远端集合，不覆盖用户手动修改的值；隐藏（已删除）的仓库跳过。
+/// origin 远端作为源地址、其余全部远端作为备份目标；仓库配置只读，
+/// 已登记仓库的 source 与目标集合恒与 config 对齐（origin 变更即跟随、
+/// config 移除 origin 时置空）；隐藏（已删除）的仓库跳过。
 pub fn discover(state: &AppState, operator: &str, lang: Lang) -> Result<(), String> {
     let base_dir = state
         .get_setting("base_dir")
@@ -124,13 +125,12 @@ pub fn discover(state: &AppState, operator: &str, lang: Lang) -> Result<(), Stri
                     if repo_id.is_empty() {
                         continue;
                     }
-                    // 补空 source，不覆盖手动修改
-                    if let Some(o) = &origin {
-                        let _ = conn.execute(
-                            "UPDATE repos SET source = ?1 WHERE id = ?2 AND source = ''",
-                            params![o, repo_id],
-                        );
-                    }
+                    // 仓库配置只读：source 恒与 config 的 origin 对齐
+                    //（config 移除 origin 时置空，仓库转为「未配置」）
+                    let _ = conn.execute(
+                        "UPDATE repos SET source = ?1 WHERE id = ?2",
+                        params![origin.clone().unwrap_or_default(), repo_id],
+                    );
                     // 同步目标远端集合：删除已不存在的远端，补/更新现有远端 URL
                     let existing: Vec<String> = {
                         let mut stmt = conn

@@ -21,9 +21,6 @@ export const api = {
   discoverRepos(token: string) {
     return invoke<Repo[]>("discover_repos", { token });
   },
-  deleteRepo(token: string, id: string) {
-    return invoke<void>("delete_repo", { token, id });
-  },
   openRepoDir(token: string, id: string) {
     return invoke<void>("open_repo_dir", { token, id });
   },

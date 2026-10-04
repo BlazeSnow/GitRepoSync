@@ -10,7 +10,6 @@ vi.mock("@/lib/api", () => ({
     listRepos: vi.fn(),
     startSync: vi.fn(),
     stopSync: vi.fn(),
-    deleteRepo: vi.fn(),
     openRepoDir: vi.fn(),
   },
 }));
@@ -195,7 +194,7 @@ it("右键表格行弹出菜单：立即同步、连续右键换行切换、点�
   render(<SyncPage token="tok" />);
   const alpha = await screen.findByText("alpha");
 
-  // 右键行 → 菜单出现（详情 / 打开目录 / 开始同步 / 删除），各项带图标
+  // 右键行 → 菜单出现（详情 / 打开目录 / 开始同步），各项带图标
   fireEvent.contextMenu(alpha);
   const menuEl = document.querySelector(".bg-popover") as HTMLElement;
   const menuButtons = Array.from(menuEl.querySelectorAll("button"));
@@ -203,7 +202,6 @@ it("右键表格行弹出菜单：立即同步、连续右键换行切换、点�
     "详情",
     "打开目录",
     "开始同步",
-    "删除",
   ]);
   expect(menuButtons.every((b) => b.querySelector("svg"))).toBe(true);
 
@@ -474,31 +472,6 @@ it("行悬停提示为结构化摘要：整体状态时间 + 各目标详情，�
   const unconfTitle = unconfRow.getAttribute("title") ?? "";
   expect(unconfTitle).toContain("未配置");
   expect(unconfTitle).not.toContain("成功");
-});
-
-it("详情弹窗内删除仓库：右键详情 → 删除仓库 → 确认后调用 deleteRepo", async () => {
-  vi.mocked(api.discoverRepos).mockResolvedValue([repo({ targets: [backupTarget] })]);
-  vi.mocked(api.listRepos).mockResolvedValue([]);
-  vi.mocked(api.deleteRepo).mockResolvedValue(undefined);
-
-  render(
-    <ToastProvider>
-      <SyncPage token="tok" />
-    </ToastProvider>,
-  );
-
-  // 右键行打开菜单，进入只读详情弹窗
-  fireEvent.contextMenu(await screen.findByText("demo"));
-  fireEvent.click(screen.getByRole("button", { name: "详情" }));
-
-  // 弹窗内删除 → 确认弹窗 → 确认
-  fireEvent.click(await screen.findByRole("button", { name: "删除仓库" }));
-  expect(await screen.findByText(/确定要删除仓库/)).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "删除" }));
-
-  await waitFor(() => expect(api.deleteRepo).toHaveBeenCalledWith("tok", "id-1"));
-  // 删除成功的即时反馈
-  expect(await screen.findByText("已删除仓库「demo」")).toBeInTheDocument();
 });
 
 it("filterStale：all 显示全部；N 天范围仅保留已配置且超期或从未同步的仓库", () => {

@@ -25,10 +25,8 @@ repo-url-invalid = URL 不能以 - 开头
 repo-url-same-as-source = 目标地址不能与源地址相同
 repo-not-found = 仓库不存在
 repo-dir-not-exist = 本地目录不存在（尚未克隆？）：{$dir}
-repo-syncing = 该仓库正在同步，请先停止同步
 log-repo-added = 添加仓库「{$name}」
 log-repo-edited = 编辑仓库「{$name}」
-log-repo-deleted = 删除仓库「{$name}」
 
 # ---------- MCP 仓库配置指引（只读化后的兼容入口） ----------
 mcp-help-add-repo = 本软件不代管仓库配置（只读）。请自行将仓库克隆到中转目录 {$base_dir}/<仓库名>，并用 git remote add 添加备份远端（origin 为源地址，其余远端为备份目标，upstream 为保留名）；完成后调用 discover_repos 登记、sync_repo 同步。

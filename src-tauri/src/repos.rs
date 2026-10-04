@@ -1,4 +1,4 @@
-//! 仓库的 Tauri 命令：列表（含自动发现）、隐藏（软删除）、打开目录。
+//! 仓库的 Tauri 命令：列表（含自动发现）与打开目录。
 //! 仓库配置只读：源与目标由 .git/config 派生（origin 为源、其余非
 //! upstream 远端为目标），由用户自行用 git remote 管理，软件不代管。
 //! 同步任务见 sync.rs；发现逻辑见 discover.rs。
@@ -28,33 +28,6 @@ pub fn list_repos(state: State<'_, Arc<AppState>>, token: String) -> Result<Vec<
         .map_err(|e| e.to_string())?;
     crate::state::attach_targets(&conn, &mut repos);
     Ok(repos)
-}
-
-#[tauri::command]
-pub fn delete_repo(
-    state: State<'_, Arc<AppState>>,
-    token: String,
-    id: String,
-) -> Result<(), String> {
-    let username = require_session(&state, &token)?;
-    let lang = gui_lang();
-    if state.job_active(&id) {
-        return Err(tr(lang, "repo-syncing"));
-    }
-    let name = {
-        let conn = lock(&state.conn);
-        let name = conn
-            .query_row("SELECT name FROM repos WHERE id = ?1", params![id], |r| {
-                r.get::<_, String>(0)
-            })
-            .map_err(|_| tr(lang, "repo-not-found"))?;
-        // 标记隐藏而非物理删除：目录仍在基地址内时避免被自动发现反复登记
-        conn.execute("UPDATE repos SET hidden = 1 WHERE id = ?1", params![id])
-            .map_err(|e| e.to_string())?;
-        name
-    };
-    state.add_log(&tr_a(lang, "log-repo-deleted", &[("name", &name)]), &username);
-    Ok(())
 }
 
 /// 主界面加载入口：先自动发现基地址内仓库，再返回最新列表
@@ -158,10 +131,10 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
-    /// delete_repo：有排队/运行中同步任务时拒绝；软删除后列表不可见且
-    /// 重复删除幂等；无效令牌拒绝
+    /// list_repos：隐藏仓库不出现；无效令牌拒绝（删除/编辑入口已随
+    /// 仓库代管一起移除，列表为纯只读视图）
     #[test]
-    fn delete_repo_hides_and_guards() {
+    fn list_repos_excludes_hidden_and_requires_session() {
         use tauri::Manager;
 
         let (app, state, root) = open_mock_app("repos");
@@ -170,44 +143,20 @@ mod tests {
         {
             let conn = lock(&state.conn);
             conn.execute(
-                "INSERT INTO repos (id, name, source) VALUES ('r1', 'demo', 'https://src/demo.git')",
+                "INSERT INTO repos (id, name, source, hidden) VALUES ('r1', 'demo', 'https://src/demo.git', 0)",
                 [],
             )
             .unwrap();
             conn.execute(
-                "INSERT INTO sync_targets (repo_id, remote, url) VALUES ('r1', 'backup', 'https://bak/demo.git')",
+                "INSERT INTO repos (id, name, source, hidden) VALUES ('r2', 'hidden-repo', 'https://src/h.git', 1)",
                 [],
             )
             .unwrap();
         }
-        let list = || -> Vec<Repo> {
-            list_repos(st.clone(), "tok".into()).unwrap()
-        };
-        assert_eq!(list().len(), 1);
-
-        // 有排队/运行中同步任务的仓库拒绝删除（跨进程任务表互斥）
-        {
-            let conn = lock(&state.conn);
-            conn.execute(
-                "INSERT INTO sync_jobs (repo_id, operator, lang, state, created_at)
-                 VALUES ('r1', 'mcp', 'zh', 'queued', 0)",
-                [],
-            )
-            .unwrap();
-        }
-        assert!(delete_repo(st.clone(), "tok".into(), "r1".into()).is_err());
-        {
-            let conn = lock(&state.conn);
-            conn.execute("DELETE FROM sync_jobs", []).unwrap();
-        }
-
-        // 软删除：列表不可见；重复删除幂等成功（行仍存在只是隐藏）
-        delete_repo(st.clone(), "tok".into(), "r1".into()).unwrap();
-        assert!(list().is_empty());
-        delete_repo(st.clone(), "tok".into(), "r1".into()).unwrap();
-
-        // 无效令牌拒绝
-        assert!(list_repos(st.clone(), "bad-token".into()).is_err());
+        let repos = list_repos(st.clone(), "tok".into()).unwrap();
+        assert_eq!(repos.len(), 1, "隐藏仓库不应出现在列表");
+        assert_eq!(repos[0].name, "demo");
+        assert!(list_repos(st.clone(), "bad-token".into()).is_err(), "无效令牌应拒绝");
 
         drop(st);
         drop(app);

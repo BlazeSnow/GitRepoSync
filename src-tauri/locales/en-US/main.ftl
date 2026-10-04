@@ -25,10 +25,8 @@ repo-url-invalid = URL must not start with '-'
 repo-url-same-as-source = Target URL must not be the same as the source URL
 repo-not-found = Repository not found
 repo-dir-not-exist = Local directory does not exist (not cloned yet?): {$dir}
-repo-syncing = This repository is syncing; stop it first
 log-repo-added = Added repository "{$name}"
 log-repo-edited = Edited repository "{$name}"
-log-repo-deleted = Deleted repository "{$name}"
 
 # ---------- MCP repo configuration guidance (read-only compat entry points) ----------
 mcp-help-add-repo = This app does not manage repository configuration (read-only). Clone the repository into the transfer directory {$base_dir}/<name> yourself and add backup remotes with git remote add (origin is the source; other remotes are backup targets; upstream is reserved). Then call discover_repos to register and sync_repo to sync.

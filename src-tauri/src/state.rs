@@ -132,17 +132,6 @@ impl AppState {
         .is_ok()
     }
 
-    /// 仓库是否有排队/运行中的同步任务（跨进程生效；删除与修改的互斥依据）
-    pub fn job_active(&self, repo_id: &str) -> bool {
-        let conn = lock(&self.conn);
-        conn.query_row(
-            "SELECT 1 FROM sync_jobs WHERE repo_id = ?1 AND state IN ('queued', 'running')",
-            params![repo_id],
-            |_| Ok(()),
-        )
-        .is_ok()
-    }
-
     /// 注入 sync-status 事件回调（GUI 启动时注入 Tauri emit）
     pub fn set_emitter(&self, f: Box<dyn Fn(SyncEvent) + Send + Sync>) {
         *self.emitter.write().unwrap_or_else(|p| p.into_inner()) = Some(f);

@@ -660,8 +660,17 @@ mod tests {
         let r = call(&state, "stop_syncs", json!({ "ids": ["r2"] })).unwrap();
         assert_eq!(r["dequeued"], json!(["r2"]));
         assert_eq!(r["stopRequested"], json!([]));
-        assert!(!state.job_active("r2"));
-        assert!(state.job_active("r1"), "运行中任务不受他人 ids 请求影响");
+        let active = |id: &str| {
+            let conn = lock(&state.conn);
+            conn.query_row(
+                "SELECT 1 FROM sync_jobs WHERE repo_id = ?1 AND state IN ('queued', 'running')",
+                params![id],
+                |_| Ok(()),
+            )
+            .is_ok()
+        };
+        assert!(!active("r2"));
+        assert!(active("r1"), "运行中任务不受他人 ids 请求影响");
 
         // 全部停止：运行中的 r1 被标记
         let r = call(&state, "stop_syncs", json!({})).unwrap();

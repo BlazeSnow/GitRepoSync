@@ -29,25 +29,21 @@ const repo: Repo = {
 };
 
 it("只读详情：标题为仓库名，源与目标只读展示，无任何输入与保存按钮", () => {
-  render(<RepoDetailDialog repo={repo} onClose={vi.fn()} onDelete={vi.fn()} />);
+  render(<RepoDetailDialog repo={repo} onClose={vi.fn()} />);
   expect(screen.getByText("demo")).toBeInTheDocument();
   expect(screen.getByText("https://github.com/u/demo.git")).toBeInTheDocument();
   expect(screen.getByText("https://gitlab.com/u/demo.git")).toBeInTheDocument();
-  // 只读：无输入框、无保存按钮
+  // 只读：无输入框、无保存按钮，也无删除入口（删除已随仓库代管一起移除）
   expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "保存" })).not.toBeInTheDocument();
-  // 删除（隐藏）入口仍在
-  expect(screen.getByRole("button", { name: "删除仓库" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "删除仓库" })).not.toBeInTheDocument();
 });
 
-it("关闭与删除回调", () => {
+it("关闭回调", () => {
   const onClose = vi.fn();
-  const onDelete = vi.fn();
-  render(<RepoDetailDialog repo={repo} onClose={onClose} onDelete={onDelete} />);
+  render(<RepoDetailDialog repo={repo} onClose={onClose} />);
   fireEvent.click(screen.getByRole("button", { name: "关闭" }));
   expect(onClose).toHaveBeenCalledTimes(1);
-  fireEvent.click(screen.getByRole("button", { name: "删除仓库" }));
-  expect(onDelete).toHaveBeenCalledWith(repo);
 });
 
 it("无目标的仓库显示「未配置」占位", () => {

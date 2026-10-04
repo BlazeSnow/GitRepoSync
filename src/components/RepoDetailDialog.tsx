@@ -12,16 +12,7 @@ import {
 import { Label } from "@/components/ui/label";
 
 /** 仓库详情弹窗（只读）：仓库配置由 git remote 管理，软件不代管 */
-export function RepoDetailDialog({
-  repo,
-  onClose,
-  onDelete,
-}: {
-  repo: Repo;
-  onClose: () => void;
-  /** 由父级执行删除（隐藏，含确认弹窗） */
-  onDelete?: (repo: Repo) => void;
-}) {
+export function RepoDetailDialog({ repo, onClose }: { repo: Repo; onClose: () => void }) {
   const { t } = useTranslation();
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
@@ -58,11 +49,6 @@ export function RepoDetailDialog({
           </div>
         </div>
         <DialogFooter>
-          {onDelete && (
-            <Button variant="destructive" className="mr-auto" onClick={() => onDelete(repo)}>
-              {t("deleteRepo")}
-            </Button>
-          )}
           <Button variant="outline" onClick={onClose}>
             {t("close")}
           </Button>

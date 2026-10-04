@@ -23,8 +23,7 @@ import {
 } from "@/components/ui/table";
 import { ContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { RepoDetailDialog } from "@/components/RepoDetailDialog";
-import { DeleteRepoDialog } from "@/components/DeleteRepoDialog";
-import { IconFolder, IconInfo, IconRefresh, IconSquare, IconTrash } from "@/components/icons";
+import { IconFolder, IconInfo, IconRefresh, IconSquare } from "@/components/icons";
 import { useToast } from "@/components/Toast";
 import { cn } from "@/lib/utils";
 import { motion } from "motion/react";
@@ -171,7 +170,6 @@ export function SyncPage({ token }: { token: string }) {
   const [sort, setSort] = useState<SortSpec>(loadSort);
   // 详情弹窗（只读）：null 表示关闭；仓库配置由 git remote 管理，软件不代管
   const [detail, setDetail] = useState<Repo | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<Repo | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; repo: Repo } | null>(null);
   const [error, setError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
@@ -265,20 +263,6 @@ export function SyncPage({ token }: { token: string }) {
     }
   }
 
-  async function handleDelete() {
-    if (!deleteTarget) return;
-    const name = deleteTarget.name;
-    try {
-      await api.deleteRepo(token, deleteTarget.id);
-      setDeleteTarget(null);
-      toast({ kind: "success", title: t("toastRepoDeleted", { name }) });
-      void load();
-    } catch (err) {
-      setDeleteTarget(null);
-      toast({ kind: "error", title: String(err) });
-    }
-  }
-
   function openMenu(e: React.MouseEvent, repo: Repo) {
     e.preventDefault();
     // 阻止冒泡到 window 的菜单关闭监听：连续右键另一行时菜单直接切换而非消失
@@ -311,12 +295,6 @@ export function SyncPage({ token }: { token: string }) {
               .then(load)
               .catch((err) => toast({ kind: "error", title: String(err) }));
           },
-        },
-        {
-          label: t("confirmDelete"),
-          icon: (cls) => <IconTrash className={cls} />,
-          danger: true,
-          onSelect: () => setDeleteTarget(menu.repo),
         },
       ]
     : [];
@@ -509,23 +487,7 @@ export function SyncPage({ token }: { token: string }) {
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />}
 
       {detail && (
-        <RepoDetailDialog
-          repo={detail}
-          onClose={() => setDetail(null)}
-          onDelete={(r) => {
-            // 详情内的删除入口：关闭详情，转由既有确认弹窗执行删除
-            setDetail(null);
-            setDeleteTarget(r);
-          }}
-        />
-      )}
-
-      {deleteTarget && (
-        <DeleteRepoDialog
-          repo={deleteTarget}
-          onCancel={() => setDeleteTarget(null)}
-          onConfirm={() => void handleDelete()}
-        />
+        <RepoDetailDialog repo={detail} onClose={() => setDetail(null)} />
       )}
     </div>
   );

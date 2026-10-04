@@ -46,7 +46,7 @@ const STALE_RANGE_KEY = "grs_stale_range";
 function loadStaleRange(): string {
   const v = localStorage.getItem(STALE_RANGE_KEY);
   if (v === null) return "all";
-  return v === "all" || STALE_DAYS.map(String).includes(v) ? v : "all";
+  return v === "all" || v === "configured" || STALE_DAYS.map(String).includes(v) ? v : "all";
 }
 
 /** 表格排序的 localStorage 键：与同步范围一致，切页后保持上次选择 */
@@ -73,12 +73,14 @@ function loadSort(): SortSpec {
 const isUnconfigured = (r: Repo) => !r.source || r.targets.length === 0;
 
 /**
- * 同步范围过滤（与后端 select_stale_ids 语义一致）：all 显示全部；
- * N 天范围内仅保留已配置且「从未同步或上次同步早于 N 天前」的仓库。
+ * 同步范围过滤：all 显示全部；configured 仅保留已配置仓库（排除未配置）；
+ * N 天范围与后端 select_stale_ids 语义一致，仅保留已配置且
+ * 「从未同步或上次同步早于 N 天前」的仓库。
  * 表格与「开始同步」按钮的计数共用同一份过滤结果，保证所见即可同步
  */
 export function filterStale(repos: Repo[], stale: string): Repo[] {
   if (stale === "all") return repos;
+  if (stale === "configured") return repos.filter((r) => !isUnconfigured(r));
   const days = Number(stale);
   if (!Number.isFinite(days) || days <= 0) return repos;
   const cutoff = Date.now() - days * 86400_000;
@@ -373,6 +375,7 @@ export function SyncPage({ token }: { token: string }) {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">{t("staleAll")}</SelectItem>
+            <SelectItem value="configured">{t("staleConfigured")}</SelectItem>
             {STALE_DAYS.map((d) => (
               <SelectItem key={d} value={String(d)}>
                 {t("staleDays", { count: d })}

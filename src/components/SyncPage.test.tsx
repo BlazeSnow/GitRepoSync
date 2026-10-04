@@ -484,6 +484,8 @@ it("filterStale：all 显示全部；N 天范围仅保留已配置且超期或�
     repo({ id: "unconf", name: "unconf", source: "", targets: [] }),
   ];
   expect(filterStale(repos, "all")).toHaveLength(4);
+  // configured：仅保留已配置仓库（排除未配置），不管同步时间
+  expect(filterStale(repos, "configured").map((r) => r.id)).toEqual(["fresh", "stale", "never"]);
   expect(filterStale(repos, "1").map((r) => r.id)).toEqual(["stale", "never"]);
   // 30 天口径下 2 天前同步过的仓库已足够「新鲜」，只剩从未同步的
   expect(filterStale(repos, "30").map((r) => r.id)).toEqual(["never"]);
@@ -512,4 +514,30 @@ it("范围下拉选择 N 天后，表格仅显示符合范围的仓库且按钮�
   await waitFor(() => expect(screen.queryByText("fresh")).not.toBeInTheDocument());
   expect(screen.getByText("stale")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "开始同步（1 个）" })).toBeInTheDocument();
+});
+
+it("范围下拉选择「已配置」后，未配置仓库隐藏且选择持久化", async () => {
+  vi.mocked(api.discoverRepos).mockResolvedValue([
+    repo({ id: "ok", name: "ok", targets: [backupTarget] }),
+    repo({ id: "none", name: "none", source: "", targets: [] }),
+  ]);
+  vi.mocked(api.listRepos).mockResolvedValue([]);
+
+  // 选择「已配置」：未配置行从表格消失，按钮按可见的已配置仓库计数
+  const first = render(<SyncPage token="tok" />);
+  expect(await screen.findByText("ok")).toBeInTheDocument();
+  expect(screen.getByText("none")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("combobox"));
+  fireEvent.click(await screen.findByRole("option", { name: "已配置" }));
+  await waitFor(() => expect(screen.queryByText("none")).not.toBeInTheDocument());
+  expect(screen.getByText("ok")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "开始同步（1 个）" })).toBeInTheDocument();
+  first.unmount();
+
+  // 切页（卸载）后重进：范围保持「已配置」而非回落全部
+  render(<SyncPage token="tok" />);
+  await screen.findByRole("combobox");
+  expect(screen.getByRole("combobox")).toHaveTextContent("已配置");
+  expect(screen.queryByText("none")).not.toBeInTheDocument();
+  expect(screen.getByText("ok")).toBeInTheDocument();
 });

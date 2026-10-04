@@ -23,6 +23,7 @@ export const en = {
   startSyncCount: "Start sync ({{count}})",
   stopSync: "Stop sync",
   staleAll: "All repositories",
+  staleConfigured: "Configured",
   staleDays_other: "Not synced in {{count}} days",
   staleDays_one: "Not synced in {{count}} day",
   staleEmpty: "No repositories to sync in this range",

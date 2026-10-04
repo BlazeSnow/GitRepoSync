@@ -23,6 +23,7 @@ export const zh = {
   startSyncCount: "开始同步（{{count}} 个）",
   stopSync: "停止同步",
   staleAll: "全部仓库",
+  staleConfigured: "已配置",
   staleDays: "{{count}} 天内未同步",
   staleEmpty: "该范围内没有需要同步的仓库",
   refreshRepos: "刷新仓库",

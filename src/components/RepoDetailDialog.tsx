@@ -17,11 +17,13 @@ export function RepoDetailDialog({ repo, onClose }: { repo: Repo; onClose: () =>
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{repo.name}</DialogTitle>
+        {/* min-w-0：弹窗为 grid 容器，网格子项默认 min-width:auto 会让
+            不可断行的长 URL 把轨道撑出弹窗边框，truncate 因此失效 */}
+        <DialogHeader className="min-w-0">
+          <DialogTitle className="truncate">{repo.name}</DialogTitle>
           <DialogDescription>{t("detailReadOnlyDesc")}</DialogDescription>
         </DialogHeader>
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
           <div className="space-y-1.5">
             <Label>origin（{t("fieldSource")}）</Label>
             <code className="block truncate rounded-md border bg-muted/50 px-3 py-2 font-mono text-xs">

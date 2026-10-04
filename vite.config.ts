@@ -30,6 +30,9 @@ export default defineConfig({
   build: {
     target: "chrome105",
     sourcemap: false,
+    // 桌面应用：前端资源随安装包本地加载（无网络开销），不做代码拆分；
+    // 单 chunk 超过 Web 默认的 500 kB 阈值属预期，放宽以消除构建告警
+    chunkSizeWarningLimit: 800,
   },
   test: {
     environment: "jsdom",

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import type { Repo } from "@/lib/types";
@@ -10,8 +10,6 @@ vi.mock("@/lib/api", () => ({
     listRepos: vi.fn(),
     startSync: vi.fn(),
     stopSync: vi.fn(),
-    saveRepo: vi.fn(),
-    deleteRepo: vi.fn(),
     openRepoDir: vi.fn(),
   },
 }));
@@ -150,6 +148,8 @@ it("无同步运行时仅显示「开始同步」，停止按钮不出现", asyn
   expect(await screen.findByText("从未")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "开始同步" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "停止同步" })).not.toBeInTheDocument();
+  // 只读化：不再提供「添加仓库」入口（发现即登记）
+  expect(screen.queryByRole("button", { name: "添加仓库" })).not.toBeInTheDocument();
 });
 
 it("有仓库同步中时仅显示「停止同步」，点击终止全部同步", async () => {
@@ -194,15 +194,14 @@ it("右键表格行弹出菜单：立即同步、连续右键换行切换、点�
   render(<SyncPage token="tok" />);
   const alpha = await screen.findByText("alpha");
 
-  // 右键行 → 菜单出现（编辑 / 打开目录 / 开始同步 / 删除），各项带图标
+  // 右键行 → 菜单出现（详情 / 打开目录 / 开始同步），各项带图标
   fireEvent.contextMenu(alpha);
   const menuEl = document.querySelector(".bg-popover") as HTMLElement;
   const menuButtons = Array.from(menuEl.querySelectorAll("button"));
   expect(menuButtons.map((b) => b.textContent)).toEqual([
-    "编辑仓库",
+    "详情",
     "打开目录",
     "开始同步",
-    "删除",
   ]);
   expect(menuButtons.every((b) => b.querySelector("svg"))).toBe(true);
 
@@ -218,22 +217,25 @@ it("右键表格行弹出菜单：立即同步、连续右键换行切换、点�
   await waitFor(() => expect(api.startSync).toHaveBeenCalledWith("tok", ["a"]));
 
   // 菜单已随点击关闭
-  expect(screen.queryByRole("button", { name: "编辑仓库" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "详情" })).not.toBeInTheDocument();
 
   // 再次右键 alpha 打开菜单，随后直接右键 beta：菜单切换到 beta 而非消失
   // （回归：openMenu 阻止冒泡，window 的关闭监听不得清空新菜单）
   fireEvent.contextMenu(screen.getByText("alpha"));
-  expect(screen.getByRole("button", { name: "编辑仓库" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "详情" })).toBeInTheDocument();
   fireEvent.contextMenu(screen.getByText("beta"));
-  fireEvent.click(screen.getByRole("button", { name: "编辑仓库" }));
-  expect(await screen.findByLabelText("仓库名称")).toHaveValue("beta");
-  fireEvent.click(screen.getByRole("button", { name: "取消" }));
+  fireEvent.click(screen.getByRole("button", { name: "详情" }));
+  // 只读详情弹窗：展示 beta，无输入框
+  expect(await screen.findByRole("dialog")).toBeInTheDocument();
+  expect(screen.getAllByText("beta").length).toBeGreaterThan(0);
+  expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "关闭" }));
 
   // 左键点击菜单外关闭
   fireEvent.contextMenu(screen.getByText("alpha"));
-  expect(screen.getByRole("button", { name: "编辑仓库" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "详情" })).toBeInTheDocument();
   fireEvent.click(document.body);
-  expect(screen.queryByRole("button", { name: "编辑仓库" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "详情" })).not.toBeInTheDocument();
 });
 
 it("表头/空白区右键仅阻止默认行为，不弹出菜单", async () => {
@@ -245,7 +247,7 @@ it("表头/空白区右键仅阻止默认行为，不弹出菜单", async () => 
 
   // 表头右键：容器 handler 阻止原生菜单，且无自定义菜单出现
   fireEvent.contextMenu(screen.getByText("仓库"));
-  expect(screen.queryByRole("button", { name: "编辑仓库" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "详情" })).not.toBeInTheDocument();
   expect(container.querySelector(".bg-popover")).toBeNull();
 });
 
@@ -398,6 +400,25 @@ it("点击状态/时间表头切换排序：升 → 降 → 恢复默认名称�
   expect(screen.getByRole("columnheader", { name: /仓库/ })).not.toHaveTextContent("↑");
 });
 
+it("双击表格行打开只读详情弹窗，关闭后消失", async () => {
+  vi.mocked(api.discoverRepos).mockResolvedValue([
+    repo({ id: "a", name: "alpha", targets: [backupTarget] }),
+  ]);
+  vi.mocked(api.listRepos).mockResolvedValue([]);
+
+  render(<SyncPage token="tok" />);
+  fireEvent.doubleClick(await screen.findByText("alpha"));
+
+  const dialog = screen.getByRole("dialog");
+  // 详情弹窗只读：展示源与目标，无输入框
+  expect(within(dialog).getByText("https://github.com/u/demo.git")).toBeInTheDocument();
+  expect(within(dialog).getByText("https://gitlab.com/u/x.git")).toBeInTheDocument();
+  expect(within(dialog).queryByRole("textbox")).not.toBeInTheDocument();
+  // 关闭后弹窗消失
+  fireEvent.click(within(dialog).getByRole("button", { name: "关闭" }));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+});
+
 it("行悬停提示为结构化摘要：整体状态时间 + 各目标详情，而非统一的步骤汇总", async () => {
   const now = Date.now();
   const generic = "拉取源仓库更新；更新 LFS 文件；更新 submodule；推送到目标仓库";
@@ -453,31 +474,6 @@ it("行悬停提示为结构化摘要：整体状态时间 + 各目标详情，�
   expect(unconfTitle).not.toContain("成功");
 });
 
-it("编辑弹窗内删除仓库：右键编辑 → 删除仓库 → 确认后调用 deleteRepo", async () => {
-  vi.mocked(api.discoverRepos).mockResolvedValue([repo({ targets: [backupTarget] })]);
-  vi.mocked(api.listRepos).mockResolvedValue([]);
-  vi.mocked(api.deleteRepo).mockResolvedValue(undefined);
-
-  render(
-    <ToastProvider>
-      <SyncPage token="tok" />
-    </ToastProvider>,
-  );
-
-  // 右键行打开菜单，进入编辑弹窗
-  fireEvent.contextMenu(await screen.findByText("demo"));
-  fireEvent.click(screen.getByRole("button", { name: "编辑仓库" }));
-
-  // 弹窗内删除 → 确认弹窗 → 确认
-  fireEvent.click(await screen.findByRole("button", { name: "删除仓库" }));
-  expect(await screen.findByText(/确定要删除仓库/)).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "删除" }));
-
-  await waitFor(() => expect(api.deleteRepo).toHaveBeenCalledWith("tok", "id-1"));
-  // 删除成功的即时反馈
-  expect(await screen.findByText("已删除仓库「demo」")).toBeInTheDocument();
-});
-
 it("filterStale：all 显示全部；N 天范围仅保留已配置且超期或从未同步的仓库", () => {
   const now = Date.now();
   const day = 86_400_000;
@@ -488,6 +484,8 @@ it("filterStale：all 显示全部；N 天范围仅保留已配置且超期或�
     repo({ id: "unconf", name: "unconf", source: "", targets: [] }),
   ];
   expect(filterStale(repos, "all")).toHaveLength(4);
+  // configured：仅保留已配置仓库（排除未配置），不管同步时间
+  expect(filterStale(repos, "configured").map((r) => r.id)).toEqual(["fresh", "stale", "never"]);
   expect(filterStale(repos, "1").map((r) => r.id)).toEqual(["stale", "never"]);
   // 30 天口径下 2 天前同步过的仓库已足够「新鲜」，只剩从未同步的
   expect(filterStale(repos, "30").map((r) => r.id)).toEqual(["never"]);
@@ -516,4 +514,30 @@ it("范围下拉选择 N 天后，表格仅显示符合范围的仓库且按钮�
   await waitFor(() => expect(screen.queryByText("fresh")).not.toBeInTheDocument());
   expect(screen.getByText("stale")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "开始同步（1 个）" })).toBeInTheDocument();
+});
+
+it("范围下拉选择「已配置」后，未配置仓库隐藏且选择持久化", async () => {
+  vi.mocked(api.discoverRepos).mockResolvedValue([
+    repo({ id: "ok", name: "ok", targets: [backupTarget] }),
+    repo({ id: "none", name: "none", source: "", targets: [] }),
+  ]);
+  vi.mocked(api.listRepos).mockResolvedValue([]);
+
+  // 选择「已配置」：未配置行从表格消失，按钮按可见的已配置仓库计数
+  const first = render(<SyncPage token="tok" />);
+  expect(await screen.findByText("ok")).toBeInTheDocument();
+  expect(screen.getByText("none")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("combobox"));
+  fireEvent.click(await screen.findByRole("option", { name: "已配置" }));
+  await waitFor(() => expect(screen.queryByText("none")).not.toBeInTheDocument());
+  expect(screen.getByText("ok")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "开始同步（1 个）" })).toBeInTheDocument();
+  first.unmount();
+
+  // 切页（卸载）后重进：范围保持「已配置」而非回落全部
+  render(<SyncPage token="tok" />);
+  await screen.findByRole("combobox");
+  expect(screen.getByRole("combobox")).toHaveTextContent("已配置");
+  expect(screen.queryByText("none")).not.toBeInTheDocument();
+  expect(screen.getByText("ok")).toBeInTheDocument();
 });

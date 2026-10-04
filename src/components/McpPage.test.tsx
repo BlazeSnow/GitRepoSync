@@ -24,7 +24,7 @@ beforeEach(async () => {
   await i18next.changeLanguage("zh");
 });
 
-it("渲染 API Key、客户端配置示例与全部 11 个工具", async () => {
+it("渲染 API Key、客户端配置示例与全部 12 个工具", async () => {
   render(<McpPage token="tok" />);
 
   expect(await screen.findByText("grs_test_key")).toBeInTheDocument();
@@ -39,6 +39,7 @@ it("渲染 API Key、客户端配置示例与全部 11 个工具", async () => {
     "remove_repo",
     "sync_repo",
     "sync_repos",
+    "stop_syncs",
     "get_sync_status",
     "list_logs",
     "get_base_dir",
@@ -46,4 +47,7 @@ it("渲染 API Key、客户端配置示例与全部 11 个工具", async () => {
   ]) {
     expect(screen.getByText(tool), `工具 ${tool} 应在表中`).toBeInTheDocument();
   }
+  // 仓库配置只读化：配置类工具的说明为指引口径
+  expect(screen.getAllByText(/仓库配置只读/).length).toBe(3);
+  expect(screen.getByText(/停止同步：终止排队与运行中的同步任务/)).toBeInTheDocument();
 });

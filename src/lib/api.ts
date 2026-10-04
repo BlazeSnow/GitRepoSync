@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { AppInfo, LoginResult, McpConfig, OperationLog, Repo } from "./types";
 
+
 export const api = {
   login(username: string, password: string, remember: boolean) {
     return invoke<LoginResult>("login", { username, password, remember });
@@ -19,20 +20,6 @@ export const api = {
   },
   discoverRepos(token: string) {
     return invoke<Repo[]>("discover_repos", { token });
-  },
-  saveRepo(
-    token: string,
-    args: {
-      id?: string | null;
-      name: string;
-      source: string;
-      targets: { remote: string; url: string }[];
-    },
-  ) {
-    return invoke<Repo>("save_repo", { token, ...args });
-  },
-  deleteRepo(token: string, id: string) {
-    return invoke<void>("delete_repo", { token, id });
   },
   openRepoDir(token: string, id: string) {
     return invoke<void>("open_repo_dir", { token, id });

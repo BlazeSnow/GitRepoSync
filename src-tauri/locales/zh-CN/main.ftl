@@ -19,13 +19,19 @@ log-change-password = 修改密码
 # ---------- 仓库 ----------
 repo-fields-empty = 仓库名称、源地址、目标地址均不能为空
 repo-name-exists = 仓库名「{$name}」已存在
+repo-name-invalid = 仓库名不能包含路径分隔符（/ 或 \\）或冒号，也不能是 . 或 ..
 repo-target-reserved = upstream 为保留远端名（fork 上游），不能作为备份目标
+repo-url-invalid = URL 不能以 - 开头
+repo-url-same-as-source = 目标地址不能与源地址相同
 repo-not-found = 仓库不存在
 repo-dir-not-exist = 本地目录不存在（尚未克隆？）：{$dir}
-repo-syncing = 该仓库正在同步，请先停止同步
 log-repo-added = 添加仓库「{$name}」
 log-repo-edited = 编辑仓库「{$name}」
-log-repo-deleted = 删除仓库「{$name}」
+
+# ---------- MCP 仓库配置指引（只读化后的兼容入口） ----------
+mcp-help-add-repo = 本软件不代管仓库配置（只读）。请自行将仓库克隆到中转目录 {$base_dir}/<仓库名>，并用 git remote add 添加备份远端（origin 为源地址，其余远端为备份目标，upstream 为保留名）；完成后调用 discover_repos 登记、sync_repo 同步。
+mcp-help-update-repo = 仓库配置只读：远端与地址请在仓库目录用 git remote 命令自行修改（仓库名即中转目录名），修改后调用 discover_repos 重新登记；同步用 sync_repo、停止用 stop_syncs。
+mcp-help-remove-repo = 本软件不代管仓库配置：如需停止同步请调用 stop_syncs；如需不再登记，请将仓库目录移出基地址后调用 discover_repos。同步用 sync_repo、停止用 stop_syncs。
 
 # ---------- 同步 ----------
 log-sync-started = 开始同步仓库「{$name}」
@@ -81,22 +87,24 @@ log-mcp-base-dir-changed = 通过 MCP 修改仓库基地址为 {$dir}
 # ---------- MCP 工具描述 ----------
 tool-list-repos = 列出所有已配置的同步仓库及其最近一次同步状态
 tool-discover-repos = 扫描基地址（中转站目录）内的一级子目录，把其中的 git 仓库登记进列表：origin 远端作为源地址、其余全部远端作为备份目标；返回登记后的完整仓库列表
-tool-add-repo = 新增或更新同步仓库（按名称幂等）：同名仓库已存在时更新源地址、合并目标并重新登记，不会产生重复条目；同步时从源仓库拉取到本地基地址作为中转站（更新 LFS 与 submodule），再推送到目标仓库地址
+tool-add-repo = 仓库配置只读：返回自行配置仓库的 git 操作指引（clone 到中转目录、git remote add 备份远端，再 discover_repos 登记、sync_repo 同步）
 tool-add-repo-name = 仓库名称（同时是本地基地址下的目录名）
 tool-add-repo-source = 源地址（Git 仓库 URL）
 tool-add-repo-target = 目标仓库地址（Git 仓库 URL，等价于 targets 单元素简写）
-tool-update-repo = 更新指定同步仓库的配置：可修改名称与源地址；提供 targets 时整体替换目标列表（仅补充目标请用 add_repo，其为合并语义）
+tool-update-repo = 仓库配置只读：返回修改仓库配置的操作指引（远端请自行用 git remote 命令管理）
 tool-update-repo-id = 仓库 ID
 tool-update-repo-name = 新仓库名称（可选）
 tool-update-repo-source = 新源地址（可选）
 tool-update-repo-targets = 完整备份目标列表（可选；提供时替换全部现有目标）
-tool-remove-repo = 移除指定同步仓库（软删除）：从列表隐藏并清空其目标配置；基地址内目录不被删除，也不会被自动发现重新登记
+tool-remove-repo = 仓库配置只读：返回移除登记的操作指引（停止同步用 stop_syncs，不再登记请将目录移出基地址）
 tool-remove-repo-id = 仓库 ID
 tool-sync-repo = 立即开始同步指定仓库（异步执行，可用 get_sync_status 查询进度）
 tool-sync-repo-id = 仓库 ID
 tool-sync-repos = 批量触发同步：提供 ids 按列表同步，或提供 days 按范围同步（0=全部仓库，N=最近 N 天未同步，含从未同步，与界面范围一致）；未配置（缺源地址或目标）的仓库自动跳过，两者都提供时优先 ids。异步执行，可用 get_sync_status 查询进度
 tool-sync-repos-ids = 仓库 ID 列表（可选）
 tool-sync-repos-days = 同步范围天数（可选；0=全部，N=最近 N 天未同步，含从未同步）
+tool-stop-syncs = 停止同步：终止排队与运行中的同步任务（跨进程生效）
+tool-stop-syncs-ids = 要停止的仓库 ID 列表，缺省为全部活动任务
 tool-get-sync-status = 查询所有仓库的最近同步状态
 tool-list-logs = 按时间倒序列出软件操作日志（操作、操作人、操作时间）
 tool-list-logs-limit = 返回条数上限（可选，默认 200，最大 1000）

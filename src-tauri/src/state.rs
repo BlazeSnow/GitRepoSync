@@ -1,11 +1,11 @@
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard, RwLock};
+use std::time::Duration;
 use uuid::Uuid;
 
-use crate::lang::Lang;
+use crate::sync::SyncEvent;
 
 /// std::sync::Mutex 带毒恢复锁：后台线程持有锁时 panic 不应拖垮整个应用
 pub fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -51,31 +51,17 @@ pub struct OperationLog {
     pub created_at: i64,
 }
 
-/// 一次同步对应的 git 子进程句柄，供“停止同步”终止进程
-pub struct SyncHandle {
-    pub child: Mutex<Option<std::process::Child>>,
-}
-
-/// 同步队列中的一个任务（仓库串行处理，避免并发拉取抢占网络）
-#[derive(Clone)]
-pub struct SyncJob {
-    pub repo_id: String,
-    pub operator: String,
-    pub lang: Lang,
-}
-
-#[derive(Default)]
-pub struct SyncQueue {
-    pub jobs: VecDeque<SyncJob>,
-    pub worker_active: bool,
-}
-
+/// 守护角色单执行者：持有 sync-daemon.lock 的进程是唯一的同步执行者，
+/// GUI 与 MCP 通过 SQLite 任务表（sync_jobs）投递、停止标记表（sync_stop）
+/// 跨进程传递停止请求；执行者退出（进程崩溃 / 正常关闭）由 OS 释放锁，
+/// 存活进程在下次投递或后台轮询时接管（try_become_daemon，见 sync.rs）。
 pub struct AppState {
     pub conn: Mutex<Connection>,
-    pub sync_procs: Mutex<HashMap<String, Arc<SyncHandle>>>,
-    pub syncing: Mutex<HashSet<String>>,
-    pub stop_requested: Mutex<HashSet<String>>,
-    pub sync_queue: Mutex<SyncQueue>,
+    /// 守护角色文件锁句柄（Some = 本进程是唯一的同步执行者）
+    pub(crate) daemon: Mutex<Option<std::fs::File>>,
+    pub(crate) daemon_lock_path: PathBuf,
+    /// sync-status 事件回调（GUI 注入 Tauri emit；MCP 与测试为空）
+    emitter: RwLock<Option<Box<dyn Fn(SyncEvent) + Send + Sync>>>,
 }
 
 /// 默认基地址：本机用户目录下的 repo 目录（完整路径）
@@ -118,13 +104,49 @@ impl AppState {
 
         let state = Self {
             conn: Mutex::new(conn),
-            sync_procs: Mutex::new(HashMap::new()),
-            syncing: Mutex::new(HashSet::new()),
-            stop_requested: Mutex::new(HashSet::new()),
-            sync_queue: Mutex::new(SyncQueue::default()),
+            daemon: Mutex::new(None),
+            daemon_lock_path: db_path
+                .parent()
+                .map(|p| p.join("sync-daemon.lock"))
+                .unwrap_or_else(|| PathBuf::from("sync-daemon.lock")),
+            emitter: RwLock::new(None),
         };
         state.seed();
         Ok(state)
+    }
+
+    /// 本进程是否为同步执行者（守护角色）
+    pub fn is_daemon(&self) -> bool {
+        lock(&self.daemon).is_some()
+    }
+
+    /// 同步停止请求（跨进程）：stop_syncs 写入 sync_stop 表，执行者进程的
+    /// git 轮询与流水线步骤边界自查后终止
+    pub fn stop_requested(&self, repo_id: &str) -> bool {
+        let conn = lock(&self.conn);
+        conn.query_row(
+            "SELECT 1 FROM sync_stop WHERE repo_id = ?1",
+            params![repo_id],
+            |_| Ok(()),
+        )
+        .is_ok()
+    }
+
+    /// 注入 sync-status 事件回调（GUI 启动时注入 Tauri emit）
+    pub fn set_emitter(&self, f: Box<dyn Fn(SyncEvent) + Send + Sync>) {
+        *self.emitter.write().unwrap_or_else(|p| p.into_inner()) = Some(f);
+    }
+
+    /// 推送同步状态事件（未注入回调时空操作）
+    pub fn emit(&self, ev: SyncEvent) {
+        if let Some(f) = self
+            .emitter
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+        {
+            f(ev);
+        }
     }
 
     fn ensure_schema(conn: &Connection) {
@@ -168,9 +190,26 @@ impl AppState {
                 action     TEXT NOT NULL,
                 operator   TEXT NOT NULL,
                 created_at INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS sync_jobs (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_id    TEXT NOT NULL,
+                operator   TEXT NOT NULL,
+                lang       TEXT NOT NULL,
+                state      TEXT NOT NULL DEFAULT 'queued',
+                created_at INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS sync_stop (
+                repo_id TEXT PRIMARY KEY
             );",
         )
         .expect("初始化数据库表失败");
+        // 同仓库同时至多一个排队/运行中任务：跨进程投递的原子去重
+        let _ = conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_sync_jobs_active
+             ON sync_jobs (repo_id) WHERE state IN ('queued', 'running')",
+            [],
+        );
         // 旧库升级：repos 表补 hidden 列（已存在时忽略错误）
         let _ = conn.execute("ALTER TABLE repos ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0", []);
         // 旧库升级：单目标 target 列迁移到 sync_targets（UNIQUE 幂等），迁移后清空旧列
@@ -288,22 +327,27 @@ impl AppState {
         );
     }
 
-    /// 将残留的 running 状态复位为 idle（仅应用启动时调用）
-    pub fn reset_running_repos(&self) {
-        let conn = lock(&self.conn);
-        let _ = conn.execute(
-            "UPDATE repos SET last_status = 'idle' WHERE last_status = 'running'",
-            [],
-        );
-    }
-
-    /// 等待所有在途同步结束（MCP 会话断开后保持进程存活，避免杀死同步）
+    /// 等待所有在途同步结束（MCP 会话断开后：执行者进程等待 running 任务
+    /// 完成再退出，避免杀死同步；客户端进程立即返回。排队任务留在表中，
+    /// 由存活的执行者或下次接管继续）
     pub fn wait_syncs_idle(&self) {
         loop {
-            if lock(&self.syncing).is_empty() {
+            if !self.is_daemon() {
                 return;
             }
-            std::thread::sleep(std::time::Duration::from_millis(200));
+            let running: i64 = {
+                let conn = lock(&self.conn);
+                conn.query_row(
+                    "SELECT COUNT(*) FROM sync_jobs WHERE state = 'running'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0)
+            };
+            if running == 0 {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(200));
         }
     }
 }

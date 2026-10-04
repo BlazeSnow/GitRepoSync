@@ -17,7 +17,7 @@ pub(crate) const RESERVED_TARGET_REMOTE: &str = "upstream";
 /// 支持工作树（.git 为文件，内容 gitdir: <路径>）。
 /// 返回 None 表示 config 无法读取（如 OneDrive 占位文件、权限问题）——
 /// 调用方应跳过该仓库，避免把“读不到”当成“没有远端”而误删已有目标。
-fn parse_remote_urls(repo_dir: &Path) -> Option<Vec<(String, String)>> {
+pub(crate) fn parse_remote_urls(repo_dir: &Path) -> Option<Vec<(String, String)>> {
     let dotgit = repo_dir.join(".git");
     let git_dir = if dotgit.is_dir() {
         dotgit
@@ -63,8 +63,9 @@ fn parse_remote_urls(repo_dir: &Path) -> Option<Vec<(String, String)>> {
 }
 
 /// 扫描基地址下的一级子目录，自动登记未入库的 git 仓库：
-/// origin 远端作为源地址、其余全部远端作为备份目标；
-/// 已登记的仓库仅补填空地址与同步远端集合，不覆盖用户手动修改的值；隐藏（已删除）的仓库跳过。
+/// origin 远端作为源地址、其余全部远端作为备份目标；仓库配置只读，
+/// 已登记仓库的 source 与目标集合恒与 config 对齐（origin 变更即跟随、
+/// config 移除 origin 时置空）；隐藏（已删除）的仓库跳过。
 pub fn discover(state: &AppState, operator: &str, lang: Lang) -> Result<(), String> {
     let base_dir = state
         .get_setting("base_dir")
@@ -124,13 +125,12 @@ pub fn discover(state: &AppState, operator: &str, lang: Lang) -> Result<(), Stri
                     if repo_id.is_empty() {
                         continue;
                     }
-                    // 补空 source，不覆盖手动修改
-                    if let Some(o) = &origin {
-                        let _ = conn.execute(
-                            "UPDATE repos SET source = ?1 WHERE id = ?2 AND source = ''",
-                            params![o, repo_id],
-                        );
-                    }
+                    // 仓库配置只读：source 恒与 config 的 origin 对齐
+                    //（config 移除 origin 时置空，仓库转为「未配置」）
+                    let _ = conn.execute(
+                        "UPDATE repos SET source = ?1 WHERE id = ?2",
+                        params![origin.clone().unwrap_or_default(), repo_id],
+                    );
                     // 同步目标远端集合：删除已不存在的远端，补/更新现有远端 URL
                     let existing: Vec<String> = {
                         let mut stmt = conn
@@ -318,6 +318,59 @@ mod tests {
         assert_eq!(rows[0].0, "beta");
         assert_eq!(rows[1].0, "gamma");
 
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 仓库配置只读：已登记仓库的 source 恒与 config 的 origin 对齐——
+    /// 手动改过的值被对齐回来；config 移除 origin 时 source 置空（仓库
+    /// 转为「未配置」）
+    #[test]
+    fn discover_aligns_source_with_origin() {
+        let root = std::env::temp_dir().join(format!("grs-align-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&root).unwrap();
+        let base = root.join("base");
+        let demo = base.join("demo");
+        std::fs::create_dir_all(&demo).unwrap();
+        let git = |args: &[&str]| {
+            let s = std::process::Command::new("git")
+                .args(args)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .current_dir(&demo)
+                .status()
+                .unwrap();
+            assert!(s.success(), "git {:?} 失败", args);
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["remote", "add", "origin", "https://github.com/u/demo.git"]);
+
+        let state = AppState::open(root.join("app.db")).unwrap();
+        state.set_setting("base_dir", &base.to_string_lossy());
+        discover(&state, "test", crate::lang::Lang::Zh).unwrap();
+
+        let source = || -> String {
+            let conn = lock(&state.conn);
+            conn.query_row("SELECT source FROM repos WHERE name = 'demo'", [], |r| r.get(0))
+                .unwrap_or_default()
+        };
+        assert_eq!(source(), "https://github.com/u/demo.git", "登记时 source = origin");
+
+        // 手动改过的 source 在下次发现时被对齐回 origin（配置只读）
+        {
+            let conn = lock(&state.conn);
+            conn.execute(
+                "UPDATE repos SET source = 'https://manual/demo.git' WHERE name = 'demo'",
+                [],
+            )
+            .unwrap();
+        }
+        discover(&state, "test", crate::lang::Lang::Zh).unwrap();
+        assert_eq!(source(), "https://github.com/u/demo.git", "source 应被对齐回 origin");
+
+        // config 移除 origin：source 置空，仓库转为「未配置」
+        git(&["remote", "remove", "origin"]);
+        discover(&state, "test", crate::lang::Lang::Zh).unwrap();
+        assert_eq!(source(), "", "config 移除 origin 后 source 应置空");
+        drop(state);
         std::fs::remove_dir_all(&root).ok();
     }
 

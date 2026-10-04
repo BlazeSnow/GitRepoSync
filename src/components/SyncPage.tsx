@@ -22,9 +22,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { ContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
-import { RepoEditDialog } from "@/components/RepoEditDialog";
-import { DeleteRepoDialog } from "@/components/DeleteRepoDialog";
-import { IconEdit, IconFolder, IconPlus, IconRefresh, IconSquare, IconTrash } from "@/components/icons";
+import { RepoDetailDialog } from "@/components/RepoDetailDialog";
+import { IconFolder, IconInfo, IconRefresh, IconSquare } from "@/components/icons";
 import { useToast } from "@/components/Toast";
 import { cn } from "@/lib/utils";
 import { motion } from "motion/react";
@@ -47,7 +46,7 @@ const STALE_RANGE_KEY = "grs_stale_range";
 function loadStaleRange(): string {
   const v = localStorage.getItem(STALE_RANGE_KEY);
   if (v === null) return "all";
-  return v === "all" || STALE_DAYS.map(String).includes(v) ? v : "all";
+  return v === "all" || v === "configured" || STALE_DAYS.map(String).includes(v) ? v : "all";
 }
 
 /** 表格排序的 localStorage 键：与同步范围一致，切页后保持上次选择 */
@@ -74,12 +73,14 @@ function loadSort(): SortSpec {
 const isUnconfigured = (r: Repo) => !r.source || r.targets.length === 0;
 
 /**
- * 同步范围过滤（与后端 select_stale_ids 语义一致）：all 显示全部；
- * N 天范围内仅保留已配置且「从未同步或上次同步早于 N 天前」的仓库。
+ * 同步范围过滤：all 显示全部；configured 仅保留已配置仓库（排除未配置）；
+ * N 天范围与后端 select_stale_ids 语义一致，仅保留已配置且
+ * 「从未同步或上次同步早于 N 天前」的仓库。
  * 表格与「开始同步」按钮的计数共用同一份过滤结果，保证所见即可同步
  */
 export function filterStale(repos: Repo[], stale: string): Repo[] {
   if (stale === "all") return repos;
+  if (stale === "configured") return repos.filter((r) => !isUnconfigured(r));
   const days = Number(stale);
   if (!Number.isFinite(days) || days <= 0) return repos;
   const cutoff = Date.now() - days * 86400_000;
@@ -169,9 +170,8 @@ export function SyncPage({ token }: { token: string }) {
   };
   // 表格排序：默认按名称（后端返回顺序），点击状态/时间表头切换；选择持久化到 localStorage
   const [sort, setSort] = useState<SortSpec>(loadSort);
-  // 编辑弹窗：null 表示添加，Repo 表示编辑；null 外层表示关闭
-  const [editor, setEditor] = useState<{ repo: Repo | null } | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<Repo | null>(null);
+  // 详情弹窗（只读）：null 表示关闭；仓库配置由 git remote 管理，软件不代管
+  const [detail, setDetail] = useState<Repo | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; repo: Repo } | null>(null);
   const [error, setError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
@@ -265,20 +265,6 @@ export function SyncPage({ token }: { token: string }) {
     }
   }
 
-  async function handleDelete() {
-    if (!deleteTarget) return;
-    const name = deleteTarget.name;
-    try {
-      await api.deleteRepo(token, deleteTarget.id);
-      setDeleteTarget(null);
-      toast({ kind: "success", title: t("toastRepoDeleted", { name }) });
-      void load();
-    } catch (err) {
-      setDeleteTarget(null);
-      toast({ kind: "error", title: String(err) });
-    }
-  }
-
   function openMenu(e: React.MouseEvent, repo: Repo) {
     e.preventDefault();
     // 阻止冒泡到 window 的菜单关闭监听：连续右键另一行时菜单直接切换而非消失
@@ -289,9 +275,9 @@ export function SyncPage({ token }: { token: string }) {
   const menuItems: ContextMenuItem[] = menu
     ? [
         {
-          label: t("editRepo"),
-          icon: (cls) => <IconEdit className={cls} />,
-          onSelect: () => setEditor({ repo: menu.repo }),
+          label: t("repoDetail"),
+          icon: (cls) => <IconInfo className={cls} />,
+          onSelect: () => setDetail(menu.repo),
         },
         {
           label: t("openDir"),
@@ -311,12 +297,6 @@ export function SyncPage({ token }: { token: string }) {
               .then(load)
               .catch((err) => toast({ kind: "error", title: String(err) }));
           },
-        },
-        {
-          label: t("confirmDelete"),
-          icon: (cls) => <IconTrash className={cls} />,
-          danger: true,
-          onSelect: () => setDeleteTarget(menu.repo),
         },
       ]
     : [];
@@ -395,6 +375,7 @@ export function SyncPage({ token }: { token: string }) {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">{t("staleAll")}</SelectItem>
+            <SelectItem value="configured">{t("staleConfigured")}</SelectItem>
             {STALE_DAYS.map((d) => (
               <SelectItem key={d} value={String(d)}>
                 {t("staleDays", { count: d })}
@@ -406,10 +387,6 @@ export function SyncPage({ token }: { token: string }) {
         <Button variant="outline" onClick={() => void handleRefresh()} disabled={refreshing}>
           <IconRefresh />
           {t("refreshRepos")}
-        </Button>
-        <Button variant="secondary" onClick={() => setEditor({ repo: null })}>
-          <IconPlus />
-          {t("addRepo")}
         </Button>
       </div>
 
@@ -481,7 +458,7 @@ export function SyncPage({ token }: { token: string }) {
                     layout="position"
                     transition={{ duration: 0.2, ease: "easeOut" }}
                     className="cursor-default select-none"
-                    onDoubleClick={() => setEditor({ repo })}
+                    onDoubleClick={() => setDetail(repo)}
                     onContextMenu={(e) => openMenu(e, repo)}
                     title={rowTitle(repo)}
                   >
@@ -512,33 +489,8 @@ export function SyncPage({ token }: { token: string }) {
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />}
 
-      {editor && (
-        <RepoEditDialog
-          token={token}
-          repo={editor.repo}
-          onClose={() => setEditor(null)}
-          onSaved={(saved) => {
-            setEditor(null);
-            toast({
-              kind: "success",
-              title: saved.id === editor.repo?.id ? t("toastRepoEdited", { name: saved.name }) : t("toastRepoAdded", { name: saved.name }),
-            });
-            void load();
-          }}
-          onDelete={(r) => {
-            // 弹窗内的删除入口：关闭编辑，转由既有确认弹窗执行删除
-            setEditor(null);
-            setDeleteTarget(r);
-          }}
-        />
-      )}
-
-      {deleteTarget && (
-        <DeleteRepoDialog
-          repo={deleteTarget}
-          onCancel={() => setDeleteTarget(null)}
-          onConfirm={() => void handleDelete()}
-        />
+      {detail && (
+        <RepoDetailDialog repo={detail} onClose={() => setDetail(null)} />
       )}
     </div>
   );

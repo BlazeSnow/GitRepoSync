@@ -25,13 +25,6 @@ repo-url-invalid = URL must not start with '-'
 repo-url-same-as-source = Target URL must not be the same as the source URL
 repo-not-found = Repository not found
 repo-dir-not-exist = Local directory does not exist (not cloned yet?): {$dir}
-log-repo-added = Added repository "{$name}"
-log-repo-edited = Edited repository "{$name}"
-
-# ---------- MCP repo configuration guidance (read-only compat entry points) ----------
-mcp-help-add-repo = This app does not manage repository configuration (read-only). Clone the repository into the transfer directory {$base_dir}/<name> yourself and add backup remotes with git remote add (origin is the source; other remotes are backup targets; upstream is reserved). Then call discover_repos to register and sync_repo to sync.
-mcp-help-update-repo = Repository configuration is read-only: edit remotes yourself with git remote in the repository directory (the name is the transfer directory name), then call discover_repos to refresh. Use sync_repo to sync and stop_syncs to stop.
-mcp-help-remove-repo = This app does not manage repository configuration: call stop_syncs to stop syncing; to unregister, move the repository directory out of the base directory and call discover_repos. Use sync_repo to sync and stop_syncs to stop.
 
 # ---------- Sync ----------
 log-sync-started = Started syncing repository "{$name}"
@@ -54,7 +47,6 @@ lfs-skipped = git-lfs not detected; skipped LFS update
 manually-stopped = Manually stopped
 git-spawn-error = Failed to launch git: {$err} (make sure Git is installed and on PATH)
 sync-unconfigured = Source or target URL is not configured
-log-repo-discovered = Discovered and registered repository "{$name}"
 
 git-timeout = git command timed out ({$secs} s)
 warn-submodule = ⚠ submodule update failed, skipped: {$err}
@@ -87,25 +79,13 @@ log-mcp-base-dir-changed = Changed repository base directory to {$dir} via MCP
 
 # ---------- MCP tool descriptions ----------
 tool-list-repos = List all configured sync repositories with their latest sync status
-tool-discover-repos = Scan the first-level subdirectories of the base directory (staging directory) and register the git repositories found: the origin remote becomes the source, all other remotes become backup targets; returns the full repository list after registration
-tool-add-repo = Configuration is read-only: returns guidance for setting the repository up yourself (clone into the transfer directory, git remote add backup remotes, then discover_repos and sync_repo)
-tool-add-repo-name = Repository name (also the directory name under the local base directory)
-tool-add-repo-source = Source URL (Git repository URL)
-tool-add-repo-target = Target repository URL (Git repository URL; shorthand for a single targets entry)
-tool-update-repo = Configuration is read-only: returns guidance for editing remotes yourself with git remote
-tool-update-repo-id = Repository ID
-tool-update-repo-name = New repository name (optional)
-tool-update-repo-source = New source URL (optional)
-tool-update-repo-targets = Full backup target list (optional; replaces all existing targets when provided)
-tool-remove-repo = Configuration is read-only: returns guidance for unregistering (use stop_syncs to stop syncing)
-tool-remove-repo-id = Repository ID
 tool-sync-repo = Start syncing the specified repository immediately (async; use get_sync_status to check progress)
-tool-sync-repo-id = Repository ID
+tool-sync-repo-name = Repository name (the directory name under the base directory)
 tool-sync-repos = Trigger batch syncs: provide ids to sync a list, or days for a range (0 = all repositories, N = not synced within the last N days, including never synced, matching the app's range); unconfigured repositories are skipped, ids takes precedence when both are given. Async; use get_sync_status to check progress
-tool-sync-repos-ids = Repository ID list (optional)
+tool-sync-repos-names = Repository name list (optional)
 tool-sync-repos-days = Sync range in days (optional; 0 = all, N = not synced within the last N days, including never synced)
 tool-stop-syncs = Stop syncing: terminate queued and running sync jobs (works across processes)
-tool-stop-syncs-ids = Repository ids to stop; omit to stop all active jobs
+tool-stop-syncs-names = Repository names to stop; omit to stop all active jobs
 tool-get-sync-status = Query the latest sync status of all repositories
 tool-list-logs = List the operation log newest first (action, operator, time)
 tool-list-logs-limit = Maximum number of entries to return (optional, default 200, max 1000)

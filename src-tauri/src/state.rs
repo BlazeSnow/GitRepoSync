@@ -1,5 +1,6 @@
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, RwLock};
 use std::time::Duration;
@@ -16,10 +17,11 @@ pub fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
+/// 仓库视图：身份为基地址下的目录名。源地址与备份目标实时扫描
+/// `.git/config` 派生（config 即唯一真源），数据库只保存同步状态
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Repo {
-    pub id: String,
     pub name: String,
     pub source: String,
     pub last_synced: Option<i64>,
@@ -39,6 +41,25 @@ pub struct TargetState {
     pub last_status: String,
     pub last_message: Option<String>,
     pub last_synced: Option<i64>,
+}
+
+/// 仓库级同步状态（repo_state 表的一行）
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoState {
+    pub last_status: String,
+    pub last_message: Option<String>,
+    pub last_synced: Option<i64>,
+}
+
+impl Default for RepoState {
+    fn default() -> Self {
+        Self {
+            last_status: "idle".to_string(),
+            last_message: None,
+            last_synced: None,
+        }
+    }
 }
 
 /// 操作日志条目（软件全部操作入库 sqlite）
@@ -122,11 +143,11 @@ impl AppState {
 
     /// 同步停止请求（跨进程）：stop_syncs 写入 sync_stop 表，执行者进程的
     /// git 轮询与流水线步骤边界自查后终止
-    pub fn stop_requested(&self, repo_id: &str) -> bool {
+    pub fn stop_requested(&self, repo_name: &str) -> bool {
         let conn = lock(&self.conn);
         conn.query_row(
-            "SELECT 1 FROM sync_stop WHERE repo_id = ?1",
-            params![repo_id],
+            "SELECT 1 FROM sync_stop WHERE repo_name = ?1",
+            params![repo_name],
             |_| Ok(()),
         )
         .is_ok()
@@ -161,26 +182,6 @@ impl AppState {
                 username   TEXT NOT NULL,
                 expires_at INTEGER NOT NULL
             );
-            CREATE TABLE IF NOT EXISTS sync_targets (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                repo_id      TEXT NOT NULL,
-                remote       TEXT NOT NULL,
-                url          TEXT NOT NULL,
-                last_synced  INTEGER,
-                last_status  TEXT NOT NULL DEFAULT 'idle',
-                last_message TEXT,
-                UNIQUE(repo_id, remote)
-            );
-            CREATE TABLE IF NOT EXISTS repos (
-                id           TEXT PRIMARY KEY,
-                name         TEXT NOT NULL,
-                source       TEXT NOT NULL,
-                target       TEXT NOT NULL DEFAULT '',
-                last_synced  INTEGER,
-                last_status  TEXT NOT NULL DEFAULT 'idle',
-                last_message TEXT,
-                hidden       INTEGER NOT NULL DEFAULT 0
-            );
             CREATE TABLE IF NOT EXISTS settings (
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -191,75 +192,47 @@ impl AppState {
                 operator   TEXT NOT NULL,
                 created_at INTEGER NOT NULL
             );
+            -- 仓库同步状态：身份为基地址下的目录名；仓库配置不入库
+            -- （源地址与备份目标每次扫描 .git/config 实时派生，config 即唯一真源）
+            CREATE TABLE IF NOT EXISTS repo_state (
+                name         TEXT PRIMARY KEY,
+                last_synced  INTEGER,
+                last_status  TEXT NOT NULL DEFAULT 'idle',
+                last_message TEXT
+            );
+            -- 目标级同步状态：按（目录名, 远端名）关联
+            CREATE TABLE IF NOT EXISTS target_state (
+                repo_name    TEXT NOT NULL,
+                remote       TEXT NOT NULL,
+                last_synced  INTEGER,
+                last_status  TEXT NOT NULL DEFAULT 'idle',
+                last_message TEXT,
+                UNIQUE(repo_name, remote)
+            );
             CREATE TABLE IF NOT EXISTS sync_jobs (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                repo_id    TEXT NOT NULL,
+                repo_name  TEXT NOT NULL,
                 operator   TEXT NOT NULL,
                 lang       TEXT NOT NULL,
                 state      TEXT NOT NULL DEFAULT 'queued',
                 created_at INTEGER NOT NULL
             );
             CREATE TABLE IF NOT EXISTS sync_stop (
-                repo_id TEXT PRIMARY KEY
+                repo_name TEXT PRIMARY KEY
             );",
         )
         .expect("初始化数据库表失败");
+
+        // 旧库升级：repos / sync_targets（含 id、source、target、hidden）已废弃——
+        // 仓库配置改为实时扫描派生，这里只把同步状态迁入新表
+        migrate_legacy_tables(conn);
+
         // 同仓库同时至多一个排队/运行中任务：跨进程投递的原子去重
         let _ = conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_sync_jobs_active
-             ON sync_jobs (repo_id) WHERE state IN ('queued', 'running')",
+             ON sync_jobs (repo_name) WHERE state IN ('queued', 'running')",
             [],
         );
-        // 旧库升级：repos 表补 hidden 列（已存在时忽略错误）
-        let _ = conn.execute("ALTER TABLE repos ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0", []);
-        // 旧库升级：单目标 target 列迁移到 sync_targets（UNIQUE 幂等），迁移后清空旧列
-        let _ = conn.execute(
-            "INSERT OR IGNORE INTO sync_targets (repo_id, remote, url)
-             SELECT id, 'backup', target FROM repos WHERE target != ''",
-            [],
-        );
-        let _ = conn.execute("UPDATE repos SET target = '' WHERE target != ''", []);
-
-        // 旧库清理：同名重复仓库去重（历史版本 add_repo 不查重产生）。
-        // name 同时是中转目录名与自动发现的身份，保留可见行中最早创建的一行
-        //（全隐藏时保留最早一行），重复行的 targets 并入保留行后删除
-        let dup_names: Vec<String> = {
-            match conn.prepare("SELECT name FROM repos GROUP BY name HAVING COUNT(*) > 1") {
-                Ok(mut stmt) => stmt
-                    .query_map([], |r| r.get::<_, String>(0))
-                    .map(|rows| rows.filter_map(Result::ok).collect::<Vec<_>>())
-                    .unwrap_or_default(),
-                Err(_) => Vec::new(),
-            }
-        };
-        for name in dup_names {
-            let keep_id: Option<String> = conn
-                .query_row(
-                    "SELECT id FROM repos WHERE name = ?1 ORDER BY hidden ASC, id ASC LIMIT 1",
-                    params![name],
-                    |r| r.get(0),
-                )
-                .ok();
-            let Some(keep_id) = keep_id else { continue };
-            let _ = conn.execute(
-                "INSERT OR IGNORE INTO sync_targets (repo_id, remote, url)
-                 SELECT ?1, remote, url FROM sync_targets
-                 WHERE repo_id IN (SELECT id FROM repos WHERE name = ?2 AND id != ?1)",
-                params![keep_id, name],
-            );
-            let _ = conn.execute(
-                "DELETE FROM sync_targets WHERE repo_id IN
-                 (SELECT id FROM repos WHERE name = ?1 AND id != ?2)",
-                params![name, keep_id],
-            );
-            let _ = conn.execute(
-                "DELETE FROM repos WHERE name = ?1 AND id != ?2",
-                params![name, keep_id],
-            );
-        }
-        // name 唯一索引：与上方去重配合，杜绝再次产生重复条目
-        //（去重后仍失败只影响本次索引创建，`let _` 不阻断启动）
-        let _ = conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_repos_name ON repos(name)", []);
     }
 
     /// 首次启动初始化：admin/admin123 用户、默认基地址、MCP APIKEY
@@ -352,59 +325,103 @@ impl AppState {
     }
 }
 
-/// repos 表查询列（与 repo_from_row 的读取列序一一对应）
-pub(crate) const REPO_COLS: &str = "id, name, source, target, last_synced, last_status, last_message";
-
-/// 从 repos 表行构造 Repo（配合 REPO_COLS 使用；target 列已废弃不读）
-pub(crate) fn repo_from_row(row: &rusqlite::Row) -> rusqlite::Result<Repo> {
-    Ok(Repo {
-        id: row.get(0)?,
-        name: row.get(1)?,
-        source: row.get(2)?,
-        last_synced: row.get(4)?,
-        last_status: row.get(5)?,
-        last_message: row.get(6)?,
-        targets: Vec::new(),
-    })
+/// 旧库升级：repos / sync_targets 已废弃（仓库配置改为实时扫描 `.git/config`
+/// 派生，不再入库），这里只把同步状态迁入 repo_state / target_state，并把
+/// 任务队列与停止标记的关联键由 repo_id 换成目录名；迁移完成后丢弃旧表。
+/// 迁移幂等：旧表不存在即视为已迁移。
+fn migrate_legacy_tables(conn: &Connection) {
+    let table_exists = |name: &str| -> bool {
+        conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            params![name],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0
+    };
+    if !table_exists("repos") {
+        return; // 新库或已完成迁移
+    }
+    // 仓库级状态
+    let _ = conn.execute(
+        "INSERT OR REPLACE INTO repo_state (name, last_synced, last_status, last_message)
+         SELECT name, last_synced, last_status, last_message FROM repos",
+        [],
+    );
+    // 目标级状态：旧表按 repo_id 关联，迁移为按目录名关联
+    let _ = conn.execute(
+        "INSERT OR REPLACE INTO target_state (repo_name, remote, last_synced, last_status, last_message)
+         SELECT r.name, t.remote, t.last_synced, t.last_status, t.last_message
+         FROM sync_targets t JOIN repos r ON r.id = t.repo_id",
+        [],
+    );
+    // 队列与停止标记：先把 repo_id 的值换成目录名（丢弃查不到对应仓库的孤儿行）
+    let _ = conn.execute(
+        "DELETE FROM sync_jobs WHERE repo_id NOT IN (SELECT id FROM repos)",
+        [],
+    );
+    let _ = conn.execute(
+        "DELETE FROM sync_stop WHERE repo_id NOT IN (SELECT id FROM repos)",
+        [],
+    );
+    let _ = conn.execute(
+        "UPDATE sync_jobs SET repo_id = (SELECT r.name FROM repos r WHERE r.id = sync_jobs.repo_id)",
+        [],
+    );
+    let _ = conn.execute(
+        "UPDATE sync_stop SET repo_id = (SELECT r.name FROM repos r WHERE r.id = sync_stop.repo_id)",
+        [],
+    );
+    // 列名同步：repo_id → repo_name
+    let _ = conn.execute("ALTER TABLE sync_jobs RENAME COLUMN repo_id TO repo_name", []);
+    let _ = conn.execute("ALTER TABLE sync_stop RENAME COLUMN repo_id TO repo_name", []);
+    // 丢弃旧表
+    let _ = conn.execute("DROP TABLE IF EXISTS repos", []);
+    let _ = conn.execute("DROP TABLE IF EXISTS sync_targets", []);
 }
 
-/// 为仓库列表附加备份目标状态
-pub fn attach_targets(conn: &Connection, repos: &mut [Repo]) {
-    for r in repos.iter_mut() {
-        r.targets.clear();
-    }
-    let mut stmt = match conn.prepare(
-        "SELECT repo_id, remote, url, last_status, last_message, last_synced
-         FROM sync_targets ORDER BY remote",
-    ) {
-        Ok(s) => s,
-        Err(_) => return,
-    };
-    let rows = match stmt.query_map([], |row| {
+/// 读取全部仓库级同步状态（目录名 → 状态）
+pub fn load_repo_states(conn: &Connection) -> HashMap<String, RepoState> {
+    let mut stmt =
+        match conn.prepare("SELECT name, last_status, last_message, last_synced FROM repo_state") {
+            Ok(s) => s,
+            Err(_) => return HashMap::new(),
+        };
+    let rows = stmt.query_map([], |r| {
         Ok((
-            row.get::<_, String>(0)?,
-            TargetState {
-                remote: row.get(1)?,
-                url: row.get(2)?,
-                last_status: row.get(3)?,
-                last_message: row.get(4)?,
-                last_synced: row.get(5)?,
+            r.get::<_, String>(0)?,
+            RepoState {
+                last_status: r.get(1)?,
+                last_message: r.get(2)?,
+                last_synced: r.get(3)?,
             },
         ))
-    }) {
-        Ok(r) => r,
-        Err(_) => return,
+    });
+    match rows {
+        Ok(it) => it.filter_map(Result::ok).collect(),
+        Err(_) => HashMap::new(),
+    }
+}
+
+/// 读取全部目标级同步状态（（目录名, 远端名）→ 状态）
+pub fn load_target_states(
+    conn: &Connection,
+) -> HashMap<(String, String), (String, Option<String>, Option<i64>)> {
+    let mut stmt = match conn.prepare(
+        "SELECT repo_name, remote, last_status, last_message, last_synced FROM target_state",
+    ) {
+        Ok(s) => s,
+        Err(_) => return HashMap::new(),
     };
-    let map: std::collections::HashMap<String, Vec<TargetState>> = rows
-        .filter_map(Result::ok)
-        .fold(std::collections::HashMap::new(), |mut m, (id, t)| {
-            m.entry(id).or_default().push(t);
-            m
-        });
-    for r in repos.iter_mut() {
-        if let Some(ts) = map.get(&r.id) {
-            r.targets = ts.clone();
-        }
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            (r.get::<_, String>(0)?, r.get::<_, String>(1)?),
+            (r.get::<_, String>(2)?, r.get::<_, Option<String>>(3)?, r.get::<_, Option<i64>>(4)?),
+        ))
+    });
+    match rows {
+        Ok(it) => it.filter_map(Result::ok).collect(),
+        Err(_) => HashMap::new(),
     }
 }
 
@@ -430,14 +447,15 @@ mod tests {
         assert_eq!(normalize_base_dir("C:\\repo"), "C:\\repo", "普通路径原样");
     }
 
-    /// 旧库同名重复行在打开时自动去重：保留可见行中最早创建的，targets 并入保留行
+    /// 旧库升级：repos / sync_targets 的同步状态迁入 repo_state / target_state，
+    /// 任务队列与停止标记的关联键由 repo_id 换成目录名，旧表被丢弃；迁移幂等
     #[test]
-    fn duplicate_names_are_merged_on_open() {
+    fn legacy_tables_are_migrated_on_open() {
         let root =
-            std::env::temp_dir().join(format!("grs-dedup-test-{}", uuid::Uuid::new_v4().simple()));
+            std::env::temp_dir().join(format!("grs-migrate-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&root).unwrap();
         let db = root.join("app.db");
-        // 手工构造旧库（重复行场景）：alpha 自动发现行（无目标）+ 旧版 add_repo 误建的同名行（有目标）
+        // 手工构造旧库
         {
             let conn = Connection::open(&db).unwrap();
             conn.execute_batch(
@@ -450,49 +468,86 @@ mod tests {
                     id INTEGER PRIMARY KEY AUTOINCREMENT, repo_id TEXT NOT NULL,
                     remote TEXT NOT NULL, url TEXT NOT NULL, last_synced INTEGER,
                     last_status TEXT NOT NULL DEFAULT 'idle', last_message TEXT,
-                    UNIQUE(repo_id, remote));",
+                    UNIQUE(repo_id, remote));
+                CREATE TABLE sync_jobs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, repo_id TEXT NOT NULL,
+                    operator TEXT NOT NULL, lang TEXT NOT NULL,
+                    state TEXT NOT NULL DEFAULT 'queued', created_at INTEGER NOT NULL);
+                CREATE TABLE sync_stop (repo_id TEXT PRIMARY KEY);",
             )
             .unwrap();
             conn.execute(
-                "INSERT INTO repos (id, name, source) VALUES ('a1', 'alpha', 'https://src/alpha.git')",
+                "INSERT INTO repos (id, name, source, last_synced, last_status, last_message)
+                 VALUES ('a1', 'alpha', 'https://src/alpha.git', 1000, 'success', 'ok')",
                 [],
             )
             .unwrap();
             conn.execute(
-                "INSERT INTO repos (id, name, source) VALUES ('a2', 'alpha', 'https://src/alpha.git')",
+                "INSERT INTO sync_targets (repo_id, remote, url, last_synced, last_status)
+                 VALUES ('a1', 'gitlab', 'https://gl/alpha.git', 2000, 'failed')",
                 [],
             )
             .unwrap();
             conn.execute(
-                "INSERT INTO sync_targets (repo_id, remote, url) VALUES ('a2', 'gitlab', 'https://gl/alpha.git')",
+                "INSERT INTO sync_jobs (repo_id, operator, lang, state, created_at)
+                 VALUES ('a1', 'admin', 'zh', 'queued', 3000)",
                 [],
             )
             .unwrap();
+            conn.execute("INSERT INTO sync_stop (repo_id) VALUES ('a1')", []).unwrap();
         }
         let state = AppState::open(db.clone()).unwrap();
         {
             let conn = lock(&state.conn);
-            let n: i64 = conn
-                .query_row("SELECT COUNT(*) FROM repos WHERE name = 'alpha'", [], |r| r.get(0))
+            // 仓库级状态已迁移
+            let st: (String, Option<String>, Option<i64>) = conn
+                .query_row(
+                    "SELECT last_status, last_message, last_synced FROM repo_state WHERE name = 'alpha'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
                 .unwrap();
-            assert_eq!(n, 1, "同名重复行去重为一条");
-            let keep: String = conn
-                .query_row("SELECT id FROM repos WHERE name = 'alpha'", [], |r| r.get(0))
+            assert_eq!(
+                st,
+                ("success".to_string(), Some("ok".to_string()), Some(1000))
+            );
+            // 目标级状态已迁移（按目录名关联）
+            let t: (String, Option<i64>) = conn
+                .query_row(
+                    "SELECT last_status, last_synced FROM target_state
+                     WHERE repo_name = 'alpha' AND remote = 'gitlab'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
                 .unwrap();
-            assert_eq!(keep, "a1", "保留可见行中最早创建的");
-            let targets: i64 = conn
-                .query_row("SELECT COUNT(*) FROM sync_targets WHERE repo_id = 'a1'", [], |r| {
-                    r.get(0)
-                })
+            assert_eq!(t, ("failed".to_string(), Some(2000)));
+            // 队列与停止标记的关联键已换成目录名
+            let job: String = conn
+                .query_row("SELECT repo_name FROM sync_jobs WHERE id = 1", [], |r| r.get(0))
                 .unwrap();
-            assert_eq!(targets, 1, "重复行的目标并入保留行");
+            assert_eq!(job, "alpha", "队列关联键应换成目录名");
+            let stop: String = conn
+                .query_row("SELECT repo_name FROM sync_stop", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(stop, "alpha", "停止标记关联键应换成目录名");
+            // 旧表已丢弃
+            let old: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'repos'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(old, 0, "旧 repos 表应被丢弃");
         }
         // 幂等：再次打开不报错、不丢数据
         drop(state);
         let state2 = AppState::open(db).unwrap();
         let conn = lock(&state2.conn);
         let n: i64 = conn
-            .query_row("SELECT COUNT(*) FROM repos WHERE name = 'alpha'", [], |r| r.get(0))
+            .query_row("SELECT COUNT(*) FROM repo_state WHERE name = 'alpha'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(n, 1);
         drop(conn);

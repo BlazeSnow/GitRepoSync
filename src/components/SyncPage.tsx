@@ -176,10 +176,10 @@ export function SyncPage({ token }: { token: string }) {
   const [error, setError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
 
-  // 全量发现（扫描基地址 + 登记新仓库）：仅在页面挂载和手动刷新时执行
+  // 仓库列表：实时扫描基地址得到的真实列表（物理目录在就在）
   const load = useCallback(async () => {
     try {
-      setRepos(await api.discoverRepos(token));
+      setRepos(await api.listRepos(token));
       setError("");
     } catch (err) {
       setError(String(err));
@@ -226,18 +226,18 @@ export function SyncPage({ token }: { token: string }) {
     [repos, stale, sort],
   );
 
-  const staleIds = useMemo(
+  const staleNames = useMemo(
     () =>
       visibleRepos
         .filter((r) => stale !== "all" || !isUnconfigured(r))
-        .map((r) => r.id),
+        .map((r) => r.name),
     [visibleRepos, stale],
   );
 
   async function handleStartSync() {
-    if (staleIds.length === 0) return;
+    if (staleNames.length === 0) return;
     try {
-      const started = await api.startSync(token, staleIds);
+      const started = await api.startSync(token, staleNames);
       toast({ kind: "info", title: t("toastSyncStarted", { count: started }) });
       void load();
     } catch (err) {
@@ -284,7 +284,7 @@ export function SyncPage({ token }: { token: string }) {
           icon: (cls) => <IconFolder className={cls} />,
           onSelect: () => {
             void api
-              .openRepoDir(token, menu.repo.id)
+              .openRepoDir(token, menu.repo.name)
               .catch((err) => toast({ kind: "error", title: String(err) }));
           },
         },
@@ -293,7 +293,7 @@ export function SyncPage({ token }: { token: string }) {
           icon: (cls) => <IconRefresh className={cls} />,
           onSelect: () => {
             void api
-              .startSync(token, [menu.repo.id])
+              .startSync(token, [menu.repo.name])
               .then(load)
               .catch((err) => toast({ kind: "error", title: String(err) }));
           },
@@ -364,9 +364,9 @@ export function SyncPage({ token }: { token: string }) {
             {t("stopSync")}
           </Button>
         ) : (
-          <Button onClick={handleStartSync} disabled={staleIds.length === 0}>
+          <Button onClick={handleStartSync} disabled={staleNames.length === 0}>
             <IconRefresh />
-            {stale === "all" ? t("startSync") : t("startSyncCount", { count: staleIds.length })}
+            {stale === "all" ? t("startSync") : t("startSyncCount", { count: staleNames.length })}
           </Button>
         )}
         <Select value={stale} onValueChange={setStale}>
@@ -454,7 +454,7 @@ export function SyncPage({ token }: { token: string }) {
                 const badge = statusBadge[repo.lastStatus] ?? statusBadge.idle;
                 return (
                   <MotionRow
-                    key={repo.id}
+                    key={repo.name}
                     layout="position"
                     transition={{ duration: 0.2, ease: "easeOut" }}
                     className="cursor-default select-none"

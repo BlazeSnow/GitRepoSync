@@ -8,6 +8,10 @@
 
 Git Repo Sync 是一款跨平台的 Git 仓库同步桌面软件，用于将仓库从源地址同步到目标地址，并支持通过 Agent（MCP）进行自动化操作。
 
+仓库列表即物理实况：每次扫描基地址下的一级子目录得到真实列表，源地址与备份目标由 `.git/config` 派生，数据库只保存同步状态——物理目录消失的仓库自动出列表，不会被同步重新拉回。仓库的克隆与远端由用户自行管理，软件不代管。
+
+MCP 以 stdio 方式对外暴露 8 个工具（仓库列表、同步触发与停止、状态查询、日志与基地址读写）。
+
 ## 2. 技术栈
 
 | 层级     | 技术                                                                    |
@@ -74,14 +78,12 @@ cd src-tauri && cargo test               # 后端单元测试
 │   └── main.tsx
 ├── src-tauri/           # Rust 后端
 │   ├── locales/         # Fluent 语言包（zh-CN / en-US）
-│   ├── src/             # main / state / lang / auth / repos / discover / sync / git / mcp（+ mcp/tools）/ settings
+│   ├── src/             # main / state / lang / auth / repos / scan / sync / git / mcp（+ mcp/tools）/ help / settings
 │   ├── Cargo.toml
 │   └── tauri.conf.json
 ├── index.html
 ├── package.json
-├── vite.config.ts
-└── tailwind.config.js
-```
+├── vite.config.ts```
 
 ## 6. 开发约定
 

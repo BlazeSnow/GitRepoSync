@@ -4,11 +4,12 @@
 fluent_i18n::i18n!("locales", fallback = "zh-CN");
 
 mod auth;
-mod discover;
 mod git;
+mod help;
 mod lang;
 mod mcp;
 mod repos;
+mod scan;
 mod settings;
 mod state;
 mod sync;
@@ -73,7 +74,6 @@ fn main() {
             auth::logout,
             auth::change_password,
             repos::list_repos,
-            repos::discover_repos,
             repos::open_repo_dir,
             sync::start_sync,
             sync::stop_sync,
@@ -131,25 +131,8 @@ fn ensure_console_for_cli() {
 }
 
 fn print_help() {
-    println!(
-        "Git Repo Sync {} - 跨平台 Git 仓库同步工具\n\n\
-用法:\n  \
-git-repo-sync [命令] [参数]\n\n\
-命令:\n  \
-(无命令)  启动图形界面\n  \
-mcp       以 stdio 模式运行 MCP 服务（供 Agent 客户端连接）\n\n\
-参数:\n  \
-mcp --api-key <KEY>   MCP APIKEY（优先级高于环境变量）\n  \
---help, -h            显示本帮助\n  \
---version, -V         显示版本号\n\n\
-环境变量:\n  \
-GIT_REPO_SYNC_API_KEY=<KEY>   MCP APIKEY 鉴权\n  \
-GIT_REPO_SYNC_LANG=<zh|en>    MCP 消息语言（默认 zh）\n\n\
-示例:\n  \
-git-repo-sync mcp --api-key grs_xxx\n  \
-git-repo-sync --version",
-        env!("CARGO_PKG_VERSION")
-    );
+    // 与 MCP `help` 方法共用同一份文本（help.rs）
+    print!("{}", help::help_text());
     use std::io::Write;
     let _ = std::io::stdout().flush();
 }

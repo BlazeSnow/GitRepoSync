@@ -1,8 +1,8 @@
 //! 同步流水线：git 子进程执行与「拉取 → 更新 → 推送」步骤编排。
-//! 被同步队列（sync.rs）调用；自身不触碰 repos 表状态，只更新 sync_targets 行。
+//! 被同步队列（sync.rs）调用；自身不触碰仓库状态表，只更新目标状态行。
 
 use crate::lang::{tr, tr_a, Lang};
-use crate::state::{lock, now_ms, AppState, Repo};
+use crate::state::{lock, now_ms, AppState};
 use rusqlite::params;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -89,13 +89,13 @@ fn git_args(args: &[&str]) -> Vec<String> {
 /// 3. 推送：本地分支 + origin 跟踪分支 + 标签，--prune 与来源强制对齐
 pub(crate) fn perform_git_sync(
     state: &AppState,
-    repo_id: &str,
-    repo: &Repo,
+    repo_name: &str,
+    source: &str,
     targets: &[(String, String)],
     base_dir: &Path,
     lang: Lang,
 ) -> (String, String) {
-    let local = base_dir.join(&repo.name);
+    let local = base_dir.join(repo_name);
     let git_timeout = Duration::from_secs(GIT_TIMEOUT_SECS);
     let lfs_timeout = Duration::from_secs(LFS_TIMEOUT_SECS);
     let mut done: Vec<String> = Vec::new();
@@ -105,7 +105,7 @@ pub(crate) fn perform_git_sync(
     if local.exists() {
         // 同步源变更时保持 origin 指向最新源地址
         steps.push(GitStep {
-            args: git_args(&["remote", "set-url", "origin", &repo.source]),
+            args: git_args(&["remote", "set-url", "origin", source]),
             cwd: Some(local.clone()),
             ok_msg: String::new(),
             timeout: git_timeout,
@@ -125,7 +125,7 @@ pub(crate) fn perform_git_sync(
             let _ = std::fs::create_dir_all(parent);
         }
         steps.push(GitStep {
-            args: git_args(&["clone", &repo.source, &local.to_string_lossy()]),
+            args: git_args(&["clone", source, &local.to_string_lossy()]),
             cwd: None,
             ok_msg: tr(lang, "step-clone"),
             timeout: git_timeout,
@@ -177,12 +177,12 @@ pub(crate) fn perform_git_sync(
 
     for step in &steps {
         // “停止同步”请求（跨进程 sync_stop 表）：终止后的剩余步骤不再执行
-        if state.stop_requested(repo_id) {
+        if state.stop_requested(repo_name) {
             return ("stopped".into(), tr(lang, "manually-stopped"));
         }
-        match run_git(state, repo_id, &step.args, step.cwd.as_deref(), step.timeout, lang) {
+        match run_git(state, repo_name, &step.args, step.cwd.as_deref(), step.timeout, lang) {
             Err(e) => {
-                if state.stop_requested(repo_id) {
+                if state.stop_requested(repo_name) {
                     return ("stopped".into(), tr(lang, "manually-stopped"));
                 }
                 if !step.fatal {
@@ -203,7 +203,7 @@ pub(crate) fn perform_git_sync(
     let mut push_refs: Vec<String> = vec!["+refs/heads/*:refs/heads/*".into()];
     let origin_refs = run_git(
         state,
-        repo_id,
+        repo_name,
         &git_args(&["for-each-ref", "--format=%(refname)", "refs/remotes/origin"]),
         Some(local.as_path()),
         git_timeout,
@@ -225,8 +225,8 @@ pub(crate) fn perform_git_sync(
     let mut any_fail = false;
     let mut target_errors: Vec<String> = Vec::new();
     for (remote, url) in targets {
-        if state.stop_requested(repo_id) {
-            reset_running_targets(state, repo_id);
+        if state.stop_requested(repo_name) {
+            reset_running_targets(state, repo_name);
             return ("stopped".into(), tr(lang, "manually-stopped"));
         }
 
@@ -237,14 +237,14 @@ pub(crate) fn perform_git_sync(
         if lfs_available {
             if let Err(e) = run_git(
                 state,
-                repo_id,
+                repo_name,
                 &git_args(&["lfs", "push", "--all", url]),
                 Some(local.as_path()),
                 lfs_timeout,
                 lang,
             ) {
-                if state.stop_requested(repo_id) {
-                    reset_running_targets(state, repo_id);
+                if state.stop_requested(repo_name) {
+                    reset_running_targets(state, repo_name);
                     return ("stopped".into(), tr(lang, "manually-stopped"));
                 }
                 // 预上传失败不阻断 git push（目标可能不启用 LFS），作为警告并入消息
@@ -259,7 +259,7 @@ pub(crate) fn perform_git_sync(
         };
         let mut push_result = run_git(
             state,
-            repo_id,
+            repo_name,
             &push_args,
             Some(local.as_path()),
             git_timeout,
@@ -273,7 +273,7 @@ pub(crate) fn perform_git_sync(
                 if lfs_available {
                     let _ = run_git(
                         state,
-                        repo_id,
+                        repo_name,
                         &git_args(&["lfs", "push", "--all", url]),
                         Some(local.as_path()),
                         lfs_timeout,
@@ -282,7 +282,7 @@ pub(crate) fn perform_git_sync(
                 }
                 push_result = run_git(
                     state,
-                    repo_id,
+                    repo_name,
                     &push_args,
                     Some(local.as_path()),
                     git_timeout,
@@ -294,8 +294,8 @@ pub(crate) fn perform_git_sync(
         let target_status;
         match push_result {
             Err(e) => {
-                if state.stop_requested(repo_id) {
-                    reset_running_targets(state, repo_id);
+                if state.stop_requested(repo_name) {
+                    reset_running_targets(state, repo_name);
                     return ("stopped".into(), tr(lang, "manually-stopped"));
                 }
                 any_fail = true;
@@ -317,15 +317,20 @@ pub(crate) fn perform_git_sync(
             }
         }
         let conn = lock(&state.conn);
+        // 目标状态行按（目录名, 远端名）写入：首次同步时行尚不存在，用 UPSERT 落库
         let _ = conn.execute(
-            "UPDATE sync_targets SET last_status = ?1, last_message = ?2, last_synced = ?3
-             WHERE repo_id = ?4 AND remote = ?5",
+            "INSERT INTO target_state (repo_name, remote, last_status, last_message, last_synced)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(repo_name, remote) DO UPDATE SET
+               last_status = excluded.last_status,
+               last_message = excluded.last_message,
+               last_synced = excluded.last_synced",
             params![
+                repo_name,
+                remote,
                 target_status.0,
                 target_status.1,
                 if target_status.0 == "success" { Some(now_ms()) } else { None },
-                repo_id,
-                remote
             ],
         );
     }
@@ -341,18 +346,18 @@ pub(crate) fn perform_git_sync(
 }
 
 /// 停止同步后把仍处于 running 的目标行复位为 idle
-pub(crate) fn reset_running_targets(state: &AppState, repo_id: &str) {
+pub(crate) fn reset_running_targets(state: &AppState, repo_name: &str) {
     let conn = lock(&state.conn);
     let _ = conn.execute(
-        "UPDATE sync_targets SET last_status = 'idle' WHERE repo_id = ?1 AND last_status = 'running'",
-        params![repo_id],
+        "UPDATE target_state SET last_status = 'idle' WHERE repo_name = ?1 AND last_status = 'running'",
+        params![repo_name],
     );
 }
 
 /// 运行 git 命令：超时强杀按失败处理。成功返回 stderr/stdout 合并文本（可能为空）。
 fn run_git(
     state: &AppState,
-    repo_id: &str,
+    repo_name: &str,
     args: &[String],
     cwd: Option<&Path>,
     timeout: Duration,
@@ -395,7 +400,7 @@ fn run_git(
         // 「停止同步」跨进程生效：停止方写 sync_stop 表（GUI 命令 / MCP
         // stop_syncs 工具），此处轮询自查、出现即自行终止——至多一个
         // 轮询周期；落在两条命令之间的请求由步骤边界检查覆盖
-        if state.stop_requested(repo_id) {
+        if state.stop_requested(repo_name) {
             let _ = child.kill();
             let _ = child.wait();
             killed = true;
@@ -567,28 +572,7 @@ mod tests {
         git(&["init", "-q", "--bare", target.to_str().unwrap()], &root);
 
         let state = AppState::open(root.join("app.db")).unwrap();
-        {
-            let conn = lock(&state.conn);
-            conn.execute(
-                "INSERT INTO repos (id, name, source) VALUES ('r1', 'demo', ?1)",
-                params![source.to_string_lossy()],
-            )
-            .unwrap();
-            conn.execute(
-                "INSERT INTO sync_targets (repo_id, remote, url) VALUES ('r1', 'backup', ?1)",
-                params![target.to_string_lossy()],
-            )
-            .unwrap();
-        }
-        let repo = Repo {
-            id: "r1".to_string(),
-            name: "demo".to_string(),
-            source: source.to_string_lossy().to_string(),
-            last_synced: None,
-            last_status: "idle".to_string(),
-            last_message: None,
-            targets: Vec::new(),
-        };
+        let source_url = source.to_string_lossy().to_string();
         let targets = vec![("backup".to_string(), target.to_string_lossy().to_string())];
         let target_sha = || {
             let out = std::process::Command::new("git")
@@ -602,7 +586,7 @@ mod tests {
 
         // 第一次同步：克隆中转 → 推送分支与标签
         let (status, message) =
-            perform_git_sync(&state, "r1", &repo, &targets, &base, crate::lang::Lang::Zh);
+            perform_git_sync(&state, "demo", &source_url, &targets, &base, crate::lang::Lang::Zh);
         assert_eq!(status, "success", "message: {message}");
         assert_eq!(target_sha(), rev_parse(&source, "HEAD"), "目标与源提交一致");
         let sha_after_first = target_sha();
@@ -612,7 +596,7 @@ mod tests {
         git(&["add", "."], &source);
         git(&["commit", "-q", "-m", "v2"], &source);
         let (status2, message2) =
-            perform_git_sync(&state, "r1", &repo, &targets, &base, crate::lang::Lang::Zh);
+            perform_git_sync(&state, "demo", &source_url, &targets, &base, crate::lang::Lang::Zh);
         assert_eq!(status2, "success", "message: {message2}");
         assert_ne!(target_sha(), sha_after_first, "第二次同步应推进目标分支");
         assert_eq!(target_sha(), rev_parse(&source, "HEAD"), "目标与源最新提交一致");
@@ -622,7 +606,7 @@ mod tests {
             let conn = lock(&state.conn);
             let (st, ts): (String, Option<i64>) = conn
                 .query_row(
-                    "SELECT last_status, last_synced FROM sync_targets WHERE repo_id = 'r1' AND remote = 'backup'",
+                    "SELECT last_status, last_synced FROM target_state WHERE repo_name = 'demo' AND remote = 'backup'",
                     [],
                     |r| Ok((r.get(0)?, r.get(1)?)),
                 )
@@ -642,21 +626,13 @@ mod tests {
         let root = std::env::temp_dir().join(format!("grs-sync-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&root).unwrap();
         let state = AppState::open(root.join("app.db")).unwrap();
-        let repo = Repo {
-            id: "r1".to_string(),
-            name: "demo".to_string(),
-            source: root.join("no-such-repo").to_string_lossy().to_string(),
-            last_synced: None,
-            last_status: "idle".to_string(),
-            last_message: None,
-            targets: Vec::new(),
-        };
+        let source_url = root.join("no-such-repo").to_string_lossy().to_string();
         let targets = vec![(
             "backup".to_string(),
             root.join("target.git").to_string_lossy().to_string(),
         )];
         let (status, message) =
-            perform_git_sync(&state, "r1", &repo, &targets, &root, crate::lang::Lang::Zh);
+            perform_git_sync(&state, "demo", &source_url, &targets, &root, crate::lang::Lang::Zh);
         assert_eq!(status, "failed");
         assert!(!message.is_empty(), "失败应带可读消息");
         drop(state);
@@ -697,40 +673,14 @@ mod tests {
         git(&["init", "-q", "--bare", good.to_str().unwrap()], &root);
 
         let state = AppState::open(root.join("app.db")).unwrap();
-        {
-            let conn = lock(&state.conn);
-            conn.execute(
-                "INSERT INTO repos (id, name, source) VALUES ('r1', 'demo', ?1)",
-                params![source.to_string_lossy()],
-            )
-            .unwrap();
-            conn.execute(
-                "INSERT INTO sync_targets (repo_id, remote, url) VALUES ('r1', 'good', ?1)",
-                params![good.to_string_lossy()],
-            )
-            .unwrap();
-            conn.execute(
-                "INSERT INTO sync_targets (repo_id, remote, url) VALUES ('r1', 'bad', ?1)",
-                params![bad.to_string_lossy()],
-            )
-            .unwrap();
-        }
-        let repo = Repo {
-            id: "r1".to_string(),
-            name: "demo".to_string(),
-            source: source.to_string_lossy().to_string(),
-            last_synced: None,
-            last_status: "idle".to_string(),
-            last_message: None,
-            targets: Vec::new(),
-        };
+        let source_url = source.to_string_lossy().to_string();
         let targets = vec![
             ("bad".to_string(), bad.to_string_lossy().to_string()),
             ("good".to_string(), good.to_string_lossy().to_string()),
         ];
 
         let (status, message) =
-            perform_git_sync(&state, "r1", &repo, &targets, &base, crate::lang::Lang::Zh);
+            perform_git_sync(&state, "demo", &source_url, &targets, &base, crate::lang::Lang::Zh);
         assert_eq!(status, "failed", "任一目标失败整体为 failed: {message}");
         // 失败原因并入整体消息（按目标格式化），供表格悬停与操作日志记录
         assert!(message.contains("推送"), "消息应含推送步骤: {message}");
@@ -739,8 +689,8 @@ mod tests {
         let row = |remote: &str| {
             let conn = lock(&state.conn);
             conn.query_row(
-                "SELECT last_status, last_message, last_synced FROM sync_targets
-                 WHERE repo_id = 'r1' AND remote = ?1",
+                "SELECT last_status, last_message, last_synced FROM target_state
+                 WHERE repo_name = 'demo' AND remote = ?1",
                 params![remote],
                 |r| {
                     Ok((

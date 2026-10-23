@@ -35,16 +35,15 @@ it("同步成功/失败/停止事件弹出对应 toast，失败附原因；运�
   await waitFor(() => expect(listen).toHaveBeenCalled());
 
   // 运行中为过程态：不弹
-  act(() => emit({ id: "1", name: "demo", status: "running", message: null, lastSynced: null }));
+  act(() => emit({ name: "demo", status: "running", message: null, lastSynced: null }));
   expect(screen.queryByText("仓库「demo」同步成功")).not.toBeInTheDocument();
 
-  act(() => emit({ id: "1", name: "demo", status: "success", message: null, lastSynced: 1 }));
+  act(() => emit({ name: "demo", status: "success", message: null, lastSynced: 1 }));
   expect(screen.getByText("仓库「demo」同步成功")).toBeInTheDocument();
 
   // 失败 toast 附完整原因（比日志页的截断更完整）
   act(() =>
     emit({
-      id: "1",
       name: "demo",
       status: "failed",
       message: "推送到 backup 失败：boom",
@@ -54,6 +53,6 @@ it("同步成功/失败/停止事件弹出对应 toast，失败附原因；运�
   expect(screen.getByText("仓库「demo」同步失败")).toBeInTheDocument();
   expect(screen.getByText("推送到 backup 失败：boom")).toBeInTheDocument();
 
-  act(() => emit({ id: "1", name: "demo", status: "stopped", message: null, lastSynced: null }));
+  act(() => emit({ name: "demo", status: "stopped", message: null, lastSynced: null }));
   expect(screen.getByText("仓库「demo」已停止同步")).toBeInTheDocument();
 });

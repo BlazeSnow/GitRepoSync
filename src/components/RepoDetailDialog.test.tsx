@@ -17,7 +17,6 @@ beforeEach(async () => {
 });
 
 const repo: Repo = {
-  id: "id-1",
   name: "demo",
   source: "https://github.com/u/demo.git",
   lastSynced: null,

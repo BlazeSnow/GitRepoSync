@@ -78,12 +78,6 @@ export const zh = {
   toolListRepos: "列出所有已配置的同步仓库及其最近一次同步状态",
   toolDiscoverRepos:
     "扫描基地址（中转站目录）内的一级子目录，把其中的 git 仓库登记进列表：origin 远端作为源地址、其余全部远端作为备份目标；返回登记后的完整仓库列表",
-  toolAddRepo:
-    "仓库配置只读：返回自行配置仓库的 git 操作指引（clone 到中转目录、git remote add 备份远端，再 discover_repos 登记、sync_repo 同步）",
-  toolUpdateRepo:
-    "仓库配置只读：返回修改仓库配置的操作指引（远端请自行用 git remote 命令管理）",
-  toolRemoveRepo:
-    "仓库配置只读：返回移除登记的操作指引（停止同步用 stop_syncs，不再登记请将目录移出基地址）",
   toolSyncRepo: "立即开始同步指定仓库（异步执行）",
   toolSyncRepos:
     "批量触发同步：提供 ids 按列表同步，或提供 days 按范围同步（0=全部仓库，N=最近 N 天未同步，含从未同步，与界面范围一致）；未配置（缺源地址或目标）的仓库自动跳过，两者都提供时优先 ids。异步执行，可用 get_sync_status 查询进度",

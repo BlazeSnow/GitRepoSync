@@ -80,15 +80,12 @@
 
 **实现说明**：软件采用 MCP stdio 连接方式——Agent 客户端以子进程运行本程序的 `mcp` 模式（`git-repo-sync.exe mcp`），协议为换行分隔的 JSON-RPC 2.0（stdin 读入、stdout 输出）。通过 APIKEY 鉴权：客户端经环境变量 `GIT_REPO_SYNC_API_KEY` 或 `--api-key` 参数提供，与 `settings` 表中的 APIKEY 一致方可访问。客户端断开后进程会等待在途同步完成再退出，不会中断同步。GUI 与 mcp 子命令共享同一 SQLite 数据库。
 
-可用工具（v1.0.0-beta.6 起 12 个）：
+可用工具（9 个）：
 
 | 工具 | 说明 |
 | --- | --- |
 | `list_repos` | 列出所有仓库及最近同步状态 |
 | `discover_repos` | 扫描基地址内已有本地仓库并登记（与界面自动发现一致），返回登记后的完整列表 |
-| `add_repo` | 仓库配置只读：返回自行配置仓库的 git 操作指引（不改任何数据） |
-| `update_repo` | 仓库配置只读：返回修改仓库配置的操作指引（不改任何数据） |
-| `remove_repo` | 仓库配置只读：返回移除登记的操作指引（不改任何数据） |
 | `sync_repo` | 立即同步指定仓库（异步） |
 | `sync_repos` | 批量触发同步：`ids` 列表或 `days` 范围（0=全部，N=最近 N 天未同步，含从未同步，与界面范围一致）；未配置仓库自动跳过，按仓库报告是否启动 |
 | `stop_syncs` | 停止同步：终止排队与运行中的任务（`ids` 可选，缺省全部活动任务），跨进程生效；返回出队与标记停止的仓库 |
@@ -99,7 +96,7 @@
 
 **工具语义**（仓库名 `name` 同时是中转目录名与自动发现的身份，全库唯一）：
 
-- 仓库配置只读：`add_repo` / `update_repo` / `remove_repo` 为兼容保留的入口，调用返回对应的 git 操作指引（自行 clone 到中转目录、`git remote` 管理远端），不改任何数据；同步类工具（`sync_repo` / `sync_repos` / `stop_syncs`）作用于发现登记的仓库
+- 仓库配置只读：软件不提供仓库增删改工具——`add_repo` / `update_repo` / `remove_repo` 已移除（历史版本中它们已退化为只返回指引、不改数据的兼容壳），登记与远端调整一律由 `discover_repos` + 用户自行 `git remote` 完成
 - `upstream` 为保留远端名：自动发现排除（fork 上游不参与同步，避免把 fork 反向推送回原仓库）
 - 旧库中历史版本产生的同名重复行，启动时自动去重（保留可见行中最早创建的，目标并入保留行），`repos.name` 有唯一索引兜底
 
@@ -132,6 +129,6 @@
 ## 10. 测试
 
 - 运行：`pnpm test`（前端 vitest + jsdom + @testing-library/react）、`cd src-tauri && cargo test`（后端）
-- 后端（46 个，删除流程移除后列表为纯只读视图）：Tauri 命令层借助 `tauri::test` 的 mock 运行时直接测试（`state.rs` 的 `testutil::open_mock_app` 提供独立临时数据库的 mock 应用）——登录/登出/改密全流程（auth）、仓库 CRUD 含目标清洗/重名/软删除幂等（repos）、基地址与 APIKEY 与日志（settings）、多目标推送独立失败语义（git）、停止同步终止 git 子进程与命令间隙停止（sync）；另有流水线端到端（真实 git 子进程，本地 bare 仓库）、路径归一化、自动发现、MCP 协议层与工具语义、旧库迁移等
-- 前端（46 个）：外观主题、多语言时间格式化、类名工具、i18n 词典键两语言一致、Toast 通知（弹出/关闭/上限/自动消失）、同步事件 toast 映射；组件渲染与交互——登录页、同步仓库页（范围筛选、按钮互斥、刷新仓库、表格排序与排序持久化、右键菜单图标与打开目录、只读详情弹窗、操作 toast、Radix Select 交互）、日志页、MCP 页（工具清单含 stop_syncs 与只读化说明）、设置页（外观与语言下拉切换）、侧边栏布局
+- 后端（46 个，删除流程移除后列表为纯只读视图）：Tauri 命令层借助 `tauri::test` 的 mock 运行时直接测试（`state.rs` 的 `testutil::open_mock_app` 提供独立临时数据库的 mock 应用）——登录/登出/改密全流程（auth）、仓库列表只读视图含隐藏行过滤与目录解析（repos）、基地址与 APIKEY 与日志（settings）、多目标推送独立失败语义（git）、停止同步终止 git 子进程与命令间隙停止（sync）；另有流水线端到端（真实 git 子进程，本地 bare 仓库）、路径归一化、自动发现、MCP 协议层与工具语义（含已移除工具不再暴露的守卫）、旧库迁移等
+- 前端（46 个）：外观主题、多语言时间格式化、类名工具、i18n 词典键两语言一致、Toast 通知（弹出/关闭/上限/自动消失）、同步事件 toast 映射；组件渲染与交互——登录页、同步仓库页（范围筛选、按钮互斥、刷新仓库、表格排序与排序持久化、右键菜单图标与打开目录、只读详情弹窗、操作 toast、Radix Select 交互）、日志页、MCP 页（9 个工具清单，含已移除工具不再出现）、设置页（外观与语言下拉切换）、侧边栏布局
 - 测试约定：前端组件测试统一在 beforeEach 中先 `import("@/i18n")` 触发 i18next 实例初始化再 `changeLanguage("zh")`；涉及 Radix Select 的用例需为 jsdom 打桩 `scrollIntoView` / pointer capture / `ResizeObserver`，选中选项走 `fireEvent.click`（pointerup 合成事件在 jsdom 不生效）；后端命令层测试各自使用独立临时目录数据库，结束时清理

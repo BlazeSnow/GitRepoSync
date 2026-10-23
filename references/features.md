@@ -81,7 +81,7 @@
 - 列出 MCP 连接配置信息（API Key、客户端配置示例），帮助用户理解配置；支持复制与重新生成 APIKEY
 - 列出 MCP 可用工具及说明
 
-**实现说明**：软件采用 MCP stdio 连接方式——Agent 客户端以子进程运行本程序的 `mcp` 模式（`git-repo-sync.exe mcp`），协议为换行分隔的 JSON-RPC 2.0（stdin 读入、stdout 输出）。通过 APIKEY 鉴权：客户端经环境变量 `GIT_REPO_SYNC_API_KEY` 或 `--api-key` 参数提供，与 `settings` 表中的 APIKEY 一致方可访问。客户端断开后进程会等待在途同步完成再退出，不会中断同步。GUI 与 mcp 子命令共享同一 SQLite 数据库。
+**实现说明**：软件采用 MCP stdio 连接方式——Agent 客户端以子进程运行本程序的 `mcp` 模式（`git-repo-sync.exe mcp`），协议为换行分隔的 JSON-RPC 2.0（stdin 读入、stdout 输出）。通过 APIKEY 鉴权：客户端经环境变量 `GIT_REPO_SYNC_API_KEY` 或 `--api-key` 参数提供，与 `settings` 表中的 APIKEY 一致方可访问。客户端断开后进程会等待在途同步完成再退出，不会中断同步。GUI 与 mcp 子命令共享同一 SQLite 数据库。协议层除标准方法（`initialize` / `ping` / `tools/list` / `tools/call`）外另提供 **`help` 方法**：返回与 CLI `--help` 完全相同的帮助文本（命令、环境变量、仓库来源约定、MCP 工具清单与参数口径），Agent 客户端可据此自助了解用法；两份文本由 `help.rs` 统一维护，不会漂移。
 
 可用工具（8 个）：
 
@@ -130,6 +130,6 @@
 ## 10. 测试
 
 - 运行：`pnpm test`（前端 vitest + jsdom + @testing-library/react）、`cd src-tauri && cargo test`（后端）
-- 后端（48 个，仓库清单不入库、列表为实时扫描的只读视图）：Tauri 命令层借助 `tauri::test` 的 mock 运行时直接测试（`state.rs` 的 `testutil::open_mock_app` 提供独立临时数据库的 mock 应用）——登录/登出/改密全流程（auth）、仓库列表只读视图与目录解析（repos / scan）、基地址与 APIKEY 与日志（settings）、多目标推送独立失败语义（git）、停止同步终止 git 子进程与命令间隙停止（sync）；另有流水线端到端（真实 git 子进程，本地 bare 仓库）、路径归一化、实时扫描（目录消失后自动出列表、目录回来后恢复且保留状态）、同步入队跳过已消失的仓库、MCP 协议层与工具语义（含已移除工具不再暴露的守卫）、旧库迁移等
+- 后端（49 个，仓库清单不入库、列表为实时扫描的只读视图）：Tauri 命令层借助 `tauri::test` 的 mock 运行时直接测试（`state.rs` 的 `testutil::open_mock_app` 提供独立临时数据库的 mock 应用）——登录/登出/改密全流程（auth）、仓库列表只读视图与目录解析（repos / scan）、基地址与 APIKEY 与日志（settings）、多目标推送独立失败语义（git）、停止同步终止 git 子进程与命令间隙停止（sync）；另有流水线端到端（真实 git 子进程，本地 bare 仓库）、路径归一化、实时扫描（目录消失后自动出列表、目录回来后恢复且保留状态）、同步入队跳过已消失的仓库、MCP 协议层与工具语义（含已移除工具不再暴露的守卫）、旧库迁移等
 - 前端（46 个）：外观主题、多语言时间格式化、类名工具、i18n 词典键两语言一致、Toast 通知（弹出/关闭/上限/自动消失）、同步事件 toast 映射；组件渲染与交互——登录页、同步仓库页（范围筛选、按钮互斥、刷新仓库、表格排序与排序持久化、右键菜单图标与打开目录、只读详情弹窗、操作 toast、Radix Select 交互）、日志页、MCP 页（8 个工具清单，含已移除工具不再出现）、设置页（外观与语言下拉切换）、侧边栏布局
 - 测试约定：前端组件测试统一在 beforeEach 中先 `import("@/i18n")` 触发 i18next 实例初始化再 `changeLanguage("zh")`；涉及 Radix Select 的用例需为 jsdom 打桩 `scrollIntoView` / pointer capture / `ResizeObserver`，选中选项走 `fireEvent.click`（pointerup 合成事件在 jsdom 不生效）；后端命令层测试各自使用独立临时目录数据库，结束时清理

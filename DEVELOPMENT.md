@@ -78,7 +78,7 @@ cd src-tauri && cargo test               # 后端单元测试
 │   └── main.tsx
 ├── src-tauri/           # Rust 后端
 │   ├── locales/         # Fluent 语言包（zh-CN / en-US）
-│   ├── src/             # main / state / lang / auth / repos / scan / sync / git / mcp（+ mcp/tools）/ settings
+│   ├── src/             # main / state / lang / auth / repos / scan / sync / git / mcp（+ mcp/tools）/ help / settings
 │   ├── Cargo.toml
 │   └── tauri.conf.json
 ├── index.html

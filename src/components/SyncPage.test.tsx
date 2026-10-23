@@ -6,7 +6,6 @@ import type { Repo } from "@/lib/types";
 // api 与 Tauri 事件打桩：组件测试不触碰后端
 vi.mock("@/lib/api", () => ({
   api: {
-    discoverRepos: vi.fn(),
     listRepos: vi.fn(),
     startSync: vi.fn(),
     stopSync: vi.fn(),
@@ -41,7 +40,6 @@ beforeAll(() => {
 
 function repo(partial: Partial<Repo>): Repo {
   return {
-    id: "id-1",
     name: "demo",
     source: "https://github.com/u/demo.git",
     lastSynced: null,
@@ -70,7 +68,7 @@ beforeEach(async () => {
 });
 
 it("渲染仓库表格：地址列含源与目标，未配置仓库有标记", async () => {
-  vi.mocked(api.discoverRepos).mockResolvedValue([
+  vi.mocked(api.listRepos).mockResolvedValue([
     repo({
       targets: [
         {
@@ -82,9 +80,8 @@ it("渲染仓库表格：地址列含源与目标，未配置仓库有标记", a
         },
       ],
     }),
-    repo({ id: "id-2", name: "bare", source: "", targets: [] }),
+    repo({ name: "bare", source: "", targets: [] }),
   ]);
-  vi.mocked(api.listRepos).mockResolvedValue([]);
 
   render(<SyncPage token="tok" />);
 
@@ -97,7 +94,7 @@ it("渲染仓库表格：地址列含源与目标，未配置仓库有标记", a
 });
 
 it("全部配置齐全时「开始同步」可用，点击后按范围发起同步", async () => {
-  vi.mocked(api.discoverRepos).mockResolvedValue([
+  vi.mocked(api.listRepos).mockResolvedValue([
     repo({
       targets: [
         {
@@ -110,7 +107,6 @@ it("全部配置齐全时「开始同步」可用，点击后按范围发起同�
       ],
     }),
   ]);
-  vi.mocked(api.listRepos).mockResolvedValue([]);
   vi.mocked(api.startSync).mockResolvedValue(1);
 
   render(
@@ -123,13 +119,13 @@ it("全部配置齐全时「开始同步」可用，点击后按范围发起同�
   fireEvent.click(button);
 
   await waitFor(() => expect(api.startSync).toHaveBeenCalled());
-  expect(api.startSync).toHaveBeenCalledWith("tok", ["id-1"]);
+  expect(api.startSync).toHaveBeenCalledWith("tok", ["demo"]);
   // 开始同步的即时反馈（数量来自后端返回的实际启动数）
   expect(await screen.findByText("已开始同步 1 个仓库")).toBeInTheDocument();
 });
 
 it("无同步运行时仅显示「开始同步」，停止按钮不出现", async () => {
-  vi.mocked(api.discoverRepos).mockResolvedValue([
+  vi.mocked(api.listRepos).mockResolvedValue([
     repo({
       targets: [
         {
@@ -142,7 +138,6 @@ it("无同步运行时仅显示「开始同步」，停止按钮不出现", asyn
       ],
     }),
   ]);
-  vi.mocked(api.listRepos).mockResolvedValue([]);
 
   render(<SyncPage token="tok" />);
   expect(await screen.findByText("从未")).toBeInTheDocument();
@@ -153,10 +148,9 @@ it("无同步运行时仅显示「开始同步」，停止按钮不出现", asyn
 });
 
 it("有仓库同步中时仅显示「停止同步」，点击终止全部同步", async () => {
-  vi.mocked(api.discoverRepos).mockResolvedValue([
-    repo({ id: "r1", name: "busy", lastStatus: "running", targets: [backupTarget] }),
+  vi.mocked(api.listRepos).mockResolvedValue([
+    repo({ name: "busy", lastStatus: "running", targets: [backupTarget] }),
   ]);
-  vi.mocked(api.listRepos).mockResolvedValue([]);
   vi.mocked(api.stopSync).mockResolvedValue(undefined);
 
   render(<SyncPage token="tok" />);
@@ -168,27 +162,25 @@ it("有仓库同步中时仅显示「停止同步」，点击终止全部同步"
 });
 
 it("点击「刷新仓库」重新扫描加载，MCP 新增的仓库可见", async () => {
-  vi.mocked(api.discoverRepos)
+  vi.mocked(api.listRepos)
     .mockResolvedValueOnce([])
-    .mockResolvedValueOnce([repo({ id: "mcp", name: "mcp-added", targets: [backupTarget] })]);
-  vi.mocked(api.listRepos).mockResolvedValue([]);
+    .mockResolvedValueOnce([repo({ name: "mcp-added", targets: [backupTarget] })]);
 
   render(<SyncPage token="tok" />);
   await screen.findByRole("combobox");
   expect(screen.queryByText("mcp-added")).not.toBeInTheDocument();
-  expect(api.discoverRepos).toHaveBeenCalledTimes(1);
+  expect(api.listRepos).toHaveBeenCalledTimes(1);
 
   fireEvent.click(screen.getByRole("button", { name: "刷新仓库" }));
   expect(await screen.findByText("mcp-added")).toBeInTheDocument();
-  expect(api.discoverRepos).toHaveBeenCalledTimes(2);
+  expect(api.listRepos).toHaveBeenCalledTimes(2);
 });
 
 it("右键表格行弹出菜单：立即同步、连续右键换行切换、点击外部关闭", async () => {
-  vi.mocked(api.discoverRepos).mockResolvedValue([
-    repo({ id: "a", name: "alpha", targets: [backupTarget] }),
-    repo({ id: "b", name: "beta", targets: [backupTarget] }),
+  vi.mocked(api.listRepos).mockResolvedValue([
+    repo({ name: "alpha", targets: [backupTarget] }),
+    repo({ name: "beta", targets: [backupTarget] }),
   ]);
-  vi.mocked(api.listRepos).mockResolvedValue([]);
   vi.mocked(api.startSync).mockResolvedValue(1);
 
   render(<SyncPage token="tok" />);
@@ -208,13 +200,13 @@ it("右键表格行弹出菜单：立即同步、连续右键换行切换、点�
   // 「打开目录」针对该行调用 openRepoDir（点击后菜单关闭）
   vi.mocked(api.openRepoDir).mockResolvedValue(undefined);
   fireEvent.click(screen.getByRole("button", { name: "打开目录" }));
-  await waitFor(() => expect(api.openRepoDir).toHaveBeenCalledWith("tok", "a"));
+  await waitFor(() => expect(api.openRepoDir).toHaveBeenCalledWith("tok", "alpha"));
 
   // 再次右键打开菜单：菜单中的「开始同步」（与工具栏按钮同名，取最后一个）针对该行发起同步
   fireEvent.contextMenu(alpha);
   const syncButtons = screen.getAllByRole("button", { name: "开始同步" });
   fireEvent.click(syncButtons[syncButtons.length - 1]);
-  await waitFor(() => expect(api.startSync).toHaveBeenCalledWith("tok", ["a"]));
+  await waitFor(() => expect(api.startSync).toHaveBeenCalledWith("tok", ["alpha"]));
 
   // 菜单已随点击关闭
   expect(screen.queryByRole("button", { name: "详情" })).not.toBeInTheDocument();
@@ -239,8 +231,7 @@ it("右键表格行弹出菜单：立即同步、连续右键换行切换、点�
 });
 
 it("表头/空白区右键仅阻止默认行为，不弹出菜单", async () => {
-  vi.mocked(api.discoverRepos).mockResolvedValue([repo({ targets: [backupTarget] })]);
-  vi.mocked(api.listRepos).mockResolvedValue([]);
+  vi.mocked(api.listRepos).mockResolvedValue([repo({ targets: [backupTarget] })]);
 
   const { container } = render(<SyncPage token="tok" />);
   await screen.findByText("demo");
@@ -254,11 +245,10 @@ it("表头/空白区右键仅阻止默认行为，不弹出菜单", async () => 
 it("切页（卸载）后重进保持同步范围选择，表格与计数随之恢复", async () => {
   const now = Date.now();
   const day = 86_400_000;
-  vi.mocked(api.discoverRepos).mockResolvedValue([
-    repo({ id: "fresh", name: "fresh", lastSynced: now, targets: [backupTarget] }),
-    repo({ id: "stale", name: "stale", lastSynced: now - 2 * day, targets: [backupTarget] }),
+  vi.mocked(api.listRepos).mockResolvedValue([
+    repo({ name: "fresh", lastSynced: now, targets: [backupTarget] }),
+    repo({ name: "stale", lastSynced: now - 2 * day, targets: [backupTarget] }),
   ]);
-  vi.mocked(api.listRepos).mockResolvedValue([]);
 
   // 第一次进入：选择「1 天内未同步」（选择写入 localStorage）
   const first = render(<SyncPage token="tok" />);
@@ -279,12 +269,11 @@ it("切页（卸载）后重进保持同步范围选择，表格与计数随之�
 it("切页（卸载）后重进保持表格排序状态", async () => {
   const now = Date.now();
   const day = 86_400_000;
-  vi.mocked(api.discoverRepos).mockResolvedValue([
-    repo({ id: "1", name: "alpha", lastStatus: "idle", lastSynced: now, targets: [backupTarget] }),
-    repo({ id: "2", name: "beta", lastStatus: "failed", lastSynced: now - day, targets: [backupTarget] }),
-    repo({ id: "3", name: "gamma", lastStatus: "success", lastSynced: null, targets: [backupTarget] }),
+  vi.mocked(api.listRepos).mockResolvedValue([
+    repo({ name: "alpha", lastStatus: "idle", lastSynced: now, targets: [backupTarget] }),
+    repo({ name: "beta", lastStatus: "failed", lastSynced: now - day, targets: [backupTarget] }),
+    repo({ name: "gamma", lastStatus: "success", lastSynced: null, targets: [backupTarget] }),
   ]);
-  vi.mocked(api.listRepos).mockResolvedValue([]);
 
   // 第一次进入：状态表头点击两次切到降序（成功在前），选择写入 localStorage
   const first = render(<SyncPage token="tok" />);
@@ -311,10 +300,10 @@ it("sortRepos：状态问题优先且未配置独立分组；时间从未同步�
   const now = Date.now();
   const day = 86_400_000;
   const repos = [
-    repo({ id: "1", name: "a", lastStatus: "idle", lastSynced: now, targets: [backupTarget] }),
-    repo({ id: "2", name: "b", lastStatus: "failed", lastSynced: now - day, targets: [backupTarget] }),
-    repo({ id: "3", name: "c", lastStatus: "success", lastSynced: null, targets: [backupTarget] }),
-    repo({ id: "4", name: "d", lastStatus: "success", lastSynced: now, source: "", targets: [] }),
+    repo({ name: "a", lastStatus: "idle", lastSynced: now, targets: [backupTarget] }),
+    repo({ name: "b", lastStatus: "failed", lastSynced: now - day, targets: [backupTarget] }),
+    repo({ name: "c", lastStatus: "success", lastSynced: null, targets: [backupTarget] }),
+    repo({ name: "d", lastStatus: "success", lastSynced: now, source: "", targets: [] }),
   ];
   const names = (rows: Repo[]) => rows.map((r) => r.name);
 
@@ -345,19 +334,17 @@ it("sortRepos：状态问题优先且未配置独立分组；时间从未同步�
 it("点击状态/时间表头切换排序：升 → 降 → 恢复默认名称序", async () => {
   const now = Date.now();
   const day = 86_400_000;
-  vi.mocked(api.discoverRepos).mockResolvedValue([
-    repo({ id: "1", name: "alpha", lastStatus: "idle", lastSynced: now, targets: [backupTarget] }),
+  vi.mocked(api.listRepos).mockResolvedValue([
+    repo({ name: "alpha", lastStatus: "idle", lastSynced: now, targets: [backupTarget] }),
     repo({
-      id: "2",
       name: "beta",
       lastStatus: "failed",
       lastMessage: "boom",
       lastSynced: now - day,
       targets: [backupTarget],
     }),
-    repo({ id: "3", name: "gamma", lastStatus: "success", lastSynced: null, targets: [backupTarget] }),
+    repo({ name: "gamma", lastStatus: "success", lastSynced: null, targets: [backupTarget] }),
   ]);
-  vi.mocked(api.listRepos).mockResolvedValue([]);
 
   render(<SyncPage token="tok" />);
   await screen.findByText("alpha");
@@ -401,10 +388,9 @@ it("点击状态/时间表头切换排序：升 → 降 → 恢复默认名称�
 });
 
 it("双击表格行打开只读详情弹窗，关闭后消失", async () => {
-  vi.mocked(api.discoverRepos).mockResolvedValue([
-    repo({ id: "a", name: "alpha", targets: [backupTarget] }),
+  vi.mocked(api.listRepos).mockResolvedValue([
+    repo({ name: "alpha", targets: [backupTarget] }),
   ]);
-  vi.mocked(api.listRepos).mockResolvedValue([]);
 
   render(<SyncPage token="tok" />);
   fireEvent.doubleClick(await screen.findByText("alpha"));
@@ -422,9 +408,8 @@ it("双击表格行打开只读详情弹窗，关闭后消失", async () => {
 it("行悬停提示为结构化摘要：整体状态时间 + 各目标详情，而非统一的步骤汇总", async () => {
   const now = Date.now();
   const generic = "拉取源仓库更新；更新 LFS 文件；更新 submodule；推送到目标仓库";
-  vi.mocked(api.discoverRepos).mockResolvedValue([
+  vi.mocked(api.listRepos).mockResolvedValue([
     repo({
-      id: "1",
       name: "ok",
       lastStatus: "success",
       lastSynced: now,
@@ -432,7 +417,6 @@ it("行悬停提示为结构化摘要：整体状态时间 + 各目标详情，�
       targets: [{ ...backupTarget, lastStatus: "success", lastSynced: now }],
     }),
     repo({
-      id: "2",
       name: "bad",
       lastStatus: "failed",
       lastSynced: null,
@@ -446,9 +430,8 @@ it("行悬停提示为结构化摘要：整体状态时间 + 各目标详情，�
         },
       ],
     }),
-    repo({ id: "3", name: "unconf", source: "", targets: [], lastStatus: "success", lastSynced: now }),
+    repo({ name: "unconf", source: "", targets: [], lastStatus: "success", lastSynced: now }),
   ]);
-  vi.mocked(api.listRepos).mockResolvedValue([]);
 
   render(<SyncPage token="tok" />);
   await screen.findByText("ok");
@@ -478,27 +461,26 @@ it("filterStale：all 显示全部；N 天范围仅保留已配置且超期或�
   const now = Date.now();
   const day = 86_400_000;
   const repos = [
-    repo({ id: "fresh", name: "fresh", lastSynced: now, targets: [backupTarget] }),
-    repo({ id: "stale", name: "stale", lastSynced: now - 2 * day, targets: [backupTarget] }),
-    repo({ id: "never", name: "never", lastSynced: null, targets: [backupTarget] }),
-    repo({ id: "unconf", name: "unconf", source: "", targets: [] }),
+    repo({ name: "fresh", lastSynced: now, targets: [backupTarget] }),
+    repo({ name: "stale", lastSynced: now - 2 * day, targets: [backupTarget] }),
+    repo({ name: "never", lastSynced: null, targets: [backupTarget] }),
+    repo({ name: "unconf", source: "", targets: [] }),
   ];
   expect(filterStale(repos, "all")).toHaveLength(4);
   // configured：仅保留已配置仓库（排除未配置），不管同步时间
-  expect(filterStale(repos, "configured").map((r) => r.id)).toEqual(["fresh", "stale", "never"]);
-  expect(filterStale(repos, "1").map((r) => r.id)).toEqual(["stale", "never"]);
+  expect(filterStale(repos, "configured").map((r) => r.name)).toEqual(["fresh", "stale", "never"]);
+  expect(filterStale(repos, "1").map((r) => r.name)).toEqual(["stale", "never"]);
   // 30 天口径下 2 天前同步过的仓库已足够「新鲜」，只剩从未同步的
-  expect(filterStale(repos, "30").map((r) => r.id)).toEqual(["never"]);
+  expect(filterStale(repos, "30").map((r) => r.name)).toEqual(["never"]);
 });
 
 it("范围下拉选择 N 天后，表格仅显示符合范围的仓库且按钮计数一致", async () => {
   const now = Date.now();
   const day = 86_400_000;
-  vi.mocked(api.discoverRepos).mockResolvedValue([
-    repo({ id: "fresh", name: "fresh", lastSynced: now, targets: [backupTarget] }),
-    repo({ id: "stale", name: "stale", lastSynced: now - 2 * day, targets: [backupTarget] }),
+  vi.mocked(api.listRepos).mockResolvedValue([
+    repo({ name: "fresh", lastSynced: now, targets: [backupTarget] }),
+    repo({ name: "stale", lastSynced: now - 2 * day, targets: [backupTarget] }),
   ]);
-  vi.mocked(api.listRepos).mockResolvedValue([]);
 
   render(<SyncPage token="tok" />);
   expect(await screen.findByText("fresh")).toBeInTheDocument();
@@ -517,11 +499,10 @@ it("范围下拉选择 N 天后，表格仅显示符合范围的仓库且按钮�
 });
 
 it("范围下拉选择「已配置」后，未配置仓库隐藏且选择持久化", async () => {
-  vi.mocked(api.discoverRepos).mockResolvedValue([
-    repo({ id: "ok", name: "ok", targets: [backupTarget] }),
-    repo({ id: "none", name: "none", source: "", targets: [] }),
+  vi.mocked(api.listRepos).mockResolvedValue([
+    repo({ name: "ok", targets: [backupTarget] }),
+    repo({ name: "none", source: "", targets: [] }),
   ]);
-  vi.mocked(api.listRepos).mockResolvedValue([]);
 
   // 选择「已配置」：未配置行从表格消失，按钮按可见的已配置仓库计数
   const first = render(<SyncPage token="tok" />);

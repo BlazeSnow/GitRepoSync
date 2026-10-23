@@ -11,7 +11,7 @@ export interface TargetState {
 }
 
 export interface Repo {
-  id: string;
+  /** 仓库身份：基地址下的目录名 */
   name: string;
   source: string;
   lastSynced: number | null;
@@ -37,7 +37,6 @@ export interface McpConfig {
 }
 
 export interface SyncEvent {
-  id: string;
   name: string;
   status: SyncStatus;
   message: string | null;

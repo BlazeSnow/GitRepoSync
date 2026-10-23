@@ -78,14 +78,12 @@ export const en = {
   mcpToolsDesc: "Tools exposed by MCP for agents",
   mcpColTool: "Tool",
   mcpColDesc: "Description",
-  toolListRepos: "List all configured sync repositories with their latest sync status",
-  toolUpdateRepos:
-    "Scan the first-level subdirectories of the base directory (staging directory) and update the repository registry: newly found git repositories are registered, and registered repositories have their source and backup targets aligned with the current git configuration (the origin remote becomes the source, all other remotes become backup targets); returns the full repository list after the update",
+  toolListRepos: "List the sync repositories under the base directory (scanned live from disk) with their latest sync status",
   toolSyncRepo: "Start syncing the specified repository immediately (async)",
   toolSyncRepos:
-    "Trigger batch syncs: provide ids to sync a list, or days for a range (0 = all repositories, N = not synced within the last N days, including never synced, matching the app's range); unconfigured repositories are skipped, ids takes precedence when both are given. Async; use get_sync_status to check progress",
+    "Trigger batch syncs: provide names to sync a list, or days for a range (0 = all repositories, N = not synced within the last N days, including never synced, matching the app's range); unconfigured repositories are skipped, names takes precedence when both are given. Async; use get_sync_status to check progress",
   toolStopSyncs:
-    "Stop syncing: terminate queued and running sync jobs (ids optional; defaults to all active jobs), works across processes",
+    "Stop syncing: terminate queued and running sync jobs (names optional; defaults to all active jobs), works across processes",
   toolGetSyncStatus: "Query the latest sync status of all repositories",
   toolListLogs: "List the operation log newest first (action, operator, time)",
   toolGetBaseDir: "Query the local repository base directory (staging directory)",

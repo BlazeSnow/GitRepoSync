@@ -18,17 +18,14 @@ export const api = {
   listRepos(token: string) {
     return invoke<Repo[]>("list_repos", { token });
   },
-  discoverRepos(token: string) {
-    return invoke<Repo[]>("discover_repos", { token });
+  openRepoDir(token: string, name: string) {
+    return invoke<void>("open_repo_dir", { token, name });
   },
-  openRepoDir(token: string, id: string) {
-    return invoke<void>("open_repo_dir", { token, id });
+  startSync(token: string, names: string[]) {
+    return invoke<number>("start_sync", { token, names });
   },
-  startSync(token: string, ids: string[]) {
-    return invoke<number>("start_sync", { token, ids });
-  },
-  stopSync(token: string, id?: string | null) {
-    return invoke<void>("stop_sync", { token, id: id ?? null });
+  stopSync(token: string, name?: string | null) {
+    return invoke<void>("stop_sync", { token, name: name ?? null });
   },
   getAppInfo(token: string) {
     return invoke<AppInfo>("get_app_info", { token });

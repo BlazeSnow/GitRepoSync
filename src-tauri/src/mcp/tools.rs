@@ -22,8 +22,8 @@ pub(super) fn tools_list(lang: Lang) -> Value {
                 "inputSchema": { "type": "object", "properties": {} }
             },
             {
-                "name": "discover_repos",
-                "description": tr(lang, "tool-discover-repos"),
+                "name": "update_repos",
+                "description": tr(lang, "tool-update-repos"),
                 "inputSchema": { "type": "object", "properties": {} }
             },
             {
@@ -150,9 +150,10 @@ pub(super) fn tools_call(
 
     let result: Result<Value, String> = match name {
         "list_repos" | "get_sync_status" => list_repos_value(state),
-        "discover_repos" => {
-            // 扫描基地址（中转站目录）登记新仓库：与界面加载逻辑一致，
-            // 新登记的仓库以 mcp 为操作人写入日志；返回登记后的完整列表
+        "update_repos" => {
+            // 扫描基地址（中转站目录）更新仓库登记状态：新增仓库登记入列，
+            // 已登记仓库的源地址与备份目标对齐到当前 git 配置；与界面加载
+            // 逻辑一致，新登记的仓库以 mcp 为操作人写入日志；返回更新后的完整列表
             discover::discover(state, OPERATOR, lang).and_then(|()| list_repos_value(state))
         }
         "list_logs" => {
@@ -541,9 +542,9 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
-    /// discover_repos：扫描基地址登记新仓库并返回列表，重复调用幂等
+    /// update_repos：扫描基地址更新仓库登记状态并返回列表，重复调用幂等
     #[test]
-    fn discover_repos_scans_base_dir() {
+    fn update_repos_scans_base_dir() {
         let (state, root) = open_state();
         // 基地址内放一个带 origin + backup 远端的 git 仓库（仅 .git/config，无需真实 git）
         let base = root.join("base");
@@ -556,7 +557,7 @@ mod tests {
         .unwrap();
         state.set_setting("base_dir", &base.to_string_lossy());
 
-        let repos = call(&state, "discover_repos", json!({})).unwrap();
+        let repos = call(&state, "update_repos", json!({})).unwrap();
         let arr = repos.as_array().unwrap();
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0]["name"], json!("alpha"));
@@ -566,7 +567,7 @@ mod tests {
         assert_eq!(targets[0]["remote"], json!("backup"));
 
         // 幂等：再次扫描不产生重复
-        let again = call(&state, "discover_repos", json!({})).unwrap();
+        let again = call(&state, "update_repos", json!({})).unwrap();
         assert_eq!(again.as_array().unwrap().len(), 1);
         std::fs::remove_dir_all(&root).ok();
     }

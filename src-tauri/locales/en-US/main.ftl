@@ -80,7 +80,7 @@ log-mcp-base-dir-changed = Changed repository base directory to {$dir} via MCP
 
 # ---------- MCP tool descriptions ----------
 tool-list-repos = List all configured sync repositories with their latest sync status
-tool-discover-repos = Scan the first-level subdirectories of the base directory (staging directory) and register the git repositories found: the origin remote becomes the source, all other remotes become backup targets; returns the full repository list after registration
+tool-update-repos = Scan the first-level subdirectories of the base directory (staging directory) and update the repository registry: newly found git repositories are registered, and registered repositories have their source and backup targets aligned with the current git configuration (the origin remote becomes the source, all other remotes become backup targets); returns the full repository list after the update
 tool-sync-repo = Start syncing the specified repository immediately (async; use get_sync_status to check progress)
 tool-sync-repo-id = Repository ID
 tool-sync-repos = Trigger batch syncs: provide ids to sync a list, or days for a range (0 = all repositories, N = not synced within the last N days, including never synced, matching the app's range); unconfigured repositories are skipped, ids takes precedence when both are given. Async; use get_sync_status to check progress

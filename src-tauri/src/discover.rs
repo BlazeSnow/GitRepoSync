@@ -1,5 +1,5 @@
 //! 自动发现：扫描基地址内的一级子目录，把 git 仓库登记进列表。
-//! 被 GUI 的 discover_repos 命令与 MCP 的 discover_repos 工具共用。
+//! 被 GUI 的 discover_repos 命令与 MCP 的 update_repos 工具共用。
 
 use crate::lang::{tr_a, Lang};
 use crate::state::{lock, AppState};

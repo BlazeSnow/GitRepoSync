@@ -1,9 +1,11 @@
-//! 自动发现：扫描基地址内的一级子目录，把 git 仓库登记进列表。
+//! 自动发现：扫描基地址内的一级子目录，把 git 仓库登记进列表，
+//! 并按物理实况隐藏已不存在的登记项（目录删除后不再被同步拉回）。
 //! 被 GUI 的 discover_repos 命令与 MCP 的 update_repos 工具共用。
 
 use crate::lang::{tr_a, Lang};
 use crate::state::{lock, AppState};
 use rusqlite::params;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
@@ -65,7 +67,12 @@ pub(crate) fn parse_remote_urls(repo_dir: &Path) -> Option<Vec<(String, String)>
 /// 扫描基地址下的一级子目录，自动登记未入库的 git 仓库：
 /// origin 远端作为源地址、其余全部远端作为备份目标；仓库配置只读，
 /// 已登记仓库的 source 与目标集合恒与 config 对齐（origin 变更即跟随、
-/// config 移除 origin 时置空）；隐藏（已删除）的仓库跳过。
+/// config 移除 origin 时置空）。
+///
+/// 仓库列表跟随物理状态：`hidden` 由目录实况驱动——基地址下不再存在
+/// （目录被删除或不再是 git 仓库）的登记项被隐藏，不再显示、不再参与同步，
+/// 避免下一次同步把已删除的物理仓库重新 clone 回来；目录重新出现即恢复可见。
+/// 基地址读取失败时不做任何隐藏（无法判断实况），仅保留原状。
 pub fn discover(state: &AppState, operator: &str, lang: Lang) -> Result<(), String> {
     let base_dir = state
         .get_setting("base_dir")
@@ -73,7 +80,12 @@ pub fn discover(state: &AppState, operator: &str, lang: Lang) -> Result<(), Stri
     let base = PathBuf::from(&base_dir);
 
     let mut found: Vec<(String, Option<String>, Vec<(String, String)>)> = Vec::new();
+    // 基地址下的 git 仓库目录名（含 .git 即计入）：用于判定登记项的物理实况
+    let mut git_dirs: HashSet<String> = HashSet::new();
+    // 基地址是否可读：读不到时无法判定实况，不做任何隐藏
+    let mut scanned = false;
     if let Ok(entries) = std::fs::read_dir(&base) {
+        scanned = true;
         for e in entries.flatten() {
             let path = e.path();
             if !path.is_dir() {
@@ -85,6 +97,7 @@ pub fn discover(state: &AppState, operator: &str, lang: Lang) -> Result<(), Stri
             if name.starts_with('.') || !path.join(".git").exists() {
                 continue;
             }
+            git_dirs.insert(name.to_string());
             let Some(remotes) = parse_remote_urls(&path) else {
                 continue; // config 读不到：跳过，不动数据库里的已有目标
             };
@@ -102,6 +115,8 @@ pub fn discover(state: &AppState, operator: &str, lang: Lang) -> Result<(), Stri
     found.sort();
 
     let mut to_register: Vec<(String, String, Vec<(String, String)>)> = Vec::new();
+    // 物理仓库已不存在、被隐藏的登记项
+    let mut removed: Vec<String> = Vec::new();
     {
         let conn = lock(&state.conn);
         for (name, origin, targets) in found {
@@ -113,8 +128,14 @@ pub fn discover(state: &AppState, operator: &str, lang: Lang) -> Result<(), Stri
                 )
                 .unwrap_or(2); // 2 = 无记录
             match hidden {
-                1 => continue, // 用户已删除，跳过
-                0 => {
+                // 已登记：hidden 由物理状态驱动，目录重新出现即恢复可见
+                0 | 1 => {
+                    if hidden == 1 {
+                        let _ = conn.execute(
+                            "UPDATE repos SET hidden = 0 WHERE name = ?1",
+                            params![name],
+                        );
+                    }
                     let repo_id: String = conn
                         .query_row(
                             "SELECT id FROM repos WHERE name = ?1",
@@ -180,9 +201,34 @@ pub fn discover(state: &AppState, operator: &str, lang: Lang) -> Result<(), Stri
                 .map_err(|e| e.to_string())?;
             }
         }
+        // 物理仓库已不存在：目录被删除，或目录仍在但已不是 git 仓库。
+        // 隐藏后不再显示、不再参与同步，避免下一次同步把仓库重新 clone 回来
+        if scanned {
+            let registered: Vec<(String, String)> = {
+                let mut stmt = conn
+                    .prepare("SELECT id, name FROM repos WHERE hidden = 0")
+                    .map_err(|e| e.to_string())?;
+                let rows = stmt
+                    .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                    .map_err(|e| e.to_string())?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| e.to_string())?;
+                rows
+            };
+            for (repo_id, name) in registered {
+                if git_dirs.contains(&name) {
+                    continue;
+                }
+                let _ = conn.execute("UPDATE repos SET hidden = 1 WHERE id = ?1", params![repo_id]);
+                removed.push(name);
+            }
+        }
     }
     for (name, _, _) in &to_register {
         state.add_log(&tr_a(lang, "log-repo-discovered", &[("name", name)]), operator);
+    }
+    for name in &removed {
+        state.add_log(&tr_a(lang, "log-repo-removed", &[("name", name)]), operator);
     }
     Ok(())
 }
@@ -307,17 +353,106 @@ mod tests {
         let rows = list();
         assert!(rows[2].2.is_empty(), "历史 upstream 目标应被自动移除");
 
-        // 隐藏的仓库不再被登记：隐藏 alpha 后其目录仍在基地址内
+        // 隐藏标记由物理实况驱动：alpha 目录仍在基地址内 → 恢复可见
         {
             let conn = lock(&state.conn);
             conn.execute("UPDATE repos SET hidden = 1 WHERE name = 'alpha'", []).unwrap();
         }
         discover(&state, "test", crate::lang::Lang::Zh).unwrap();
         let rows = list();
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].0, "beta");
-        assert_eq!(rows[1].0, "gamma");
+        assert_eq!(rows.len(), 3, "目录仍在的仓库应恢复可见");
+        assert_eq!(rows[0].0, "alpha");
 
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 仓库列表跟随物理实况：物理仓库被删除后隐藏（不再显示、不再参与同步，
+    /// 避免下一次同步把它重新 clone 回来）；目录重新出现则恢复可见
+    #[test]
+    fn discover_hides_vanished_repo_and_restores_it() {
+        let root = std::env::temp_dir().join(format!("grs-vanish-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&root).unwrap();
+        let base = root.join("base");
+        let demo = base.join("demo");
+        std::fs::create_dir_all(&demo).unwrap();
+        let git = |args: &[&str]| {
+            let s = std::process::Command::new("git")
+                .args(args)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .current_dir(&demo)
+                .status()
+                .unwrap();
+            assert!(s.success(), "git {:?} 失败", args);
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["remote", "add", "origin", "https://github.com/u/demo.git"]);
+        git(&["remote", "add", "backup", "https://gitlab.com/u/demo.git"]);
+
+        let state = AppState::open(root.join("app.db")).unwrap();
+        state.set_setting("base_dir", &base.to_string_lossy());
+        discover(&state, "test", crate::lang::Lang::Zh).unwrap();
+
+        let visible = || -> Vec<String> {
+            let conn = lock(&state.conn);
+            let mut stmt = conn
+                .prepare("SELECT name FROM repos WHERE hidden = 0 ORDER BY name")
+                .unwrap();
+            stmt.query_map([], |r| r.get::<_, String>(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+        assert_eq!(visible(), vec!["demo".to_string()], "登记后可见");
+
+        // 物理仓库被删除：再次扫描后隐藏，不再出现在列表
+        std::fs::remove_dir_all(&demo).unwrap();
+        discover(&state, "test", crate::lang::Lang::Zh).unwrap();
+        assert!(visible().is_empty(), "物理仓库删除后应从列表移除");
+        let hidden: i64 = {
+            let conn = lock(&state.conn);
+            conn.query_row("SELECT hidden FROM repos WHERE name = 'demo'", [], |r| {
+                r.get(0)
+            })
+            .unwrap()
+        };
+        assert_eq!(hidden, 1, "登记项应被标记为隐藏");
+        // 隐藏后不再参与同步（不会被重新 clone 回来）
+        assert!(
+            crate::sync::select_stale_ids(&state, 0).unwrap().is_empty(),
+            "隐藏的仓库不应被选入同步范围"
+        );
+
+        // 目录重新出现：恢复可见并重新登记同步目标
+        std::fs::create_dir_all(&demo).unwrap();
+        git(&["init", "-q", "-b", "main"]);
+        git(&["remote", "add", "origin", "https://github.com/u/demo.git"]);
+        git(&["remote", "add", "backup", "https://gitlab.com/u/demo.git"]);
+        discover(&state, "test", crate::lang::Lang::Zh).unwrap();
+        assert_eq!(visible(), vec!["demo".to_string()], "目录回来后应恢复可见");
+
+        // 基地址不可读时不做隐藏（无法判断实况，保留原状）
+        let state2 = AppState::open(root.join("app2.db")).unwrap();
+        state2.set_setting("base_dir", &root.join("missing").to_string_lossy());
+        {
+            let conn = lock(&state2.conn);
+            conn.execute(
+                "INSERT INTO repos (id, name, source, hidden) VALUES ('r1', 'demo', 'https://github.com/u/demo.git', 0)",
+                [],
+            )
+            .unwrap();
+        }
+        discover(&state2, "test", crate::lang::Lang::Zh).unwrap();
+        let still: i64 = {
+            let conn = lock(&state2.conn);
+            conn.query_row("SELECT hidden FROM repos WHERE name = 'demo'", [], |r| {
+                r.get(0)
+            })
+            .unwrap()
+        };
+        assert_eq!(still, 0, "基地址不可读时不应隐藏任何登记项");
+
+        drop(state);
+        drop(state2);
         std::fs::remove_dir_all(&root).ok();
     }
 

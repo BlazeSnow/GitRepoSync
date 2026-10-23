@@ -48,6 +48,7 @@ manually-stopped = Manually stopped
 git-spawn-error = Failed to launch git: {$err} (make sure Git is installed and on PATH)
 sync-unconfigured = Source or target URL is not configured
 log-repo-discovered = Discovered and registered repository "{$name}"
+log-repo-removed = Physical repository "{$name}" no longer exists; removed from the repository list (no longer synced)
 
 git-timeout = git command timed out ({$secs} s)
 warn-submodule = ⚠ submodule update failed, skipped: {$err}

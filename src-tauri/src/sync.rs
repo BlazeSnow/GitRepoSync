@@ -121,12 +121,14 @@ pub fn enqueue_syncs(
     state.try_become_daemon();
     let mut results = Vec::with_capacity(ids.len());
     for id in ids {
-        // 未配置（缺源地址或备份目标）的仓库不参与同步，避免必然的“失败”
+        // 未配置（缺源地址或备份目标）的仓库不参与同步，避免必然的“失败”；
+        // 物理仓库已不存在而被隐藏的仓库同样跳过（hidden = 1），
+        // 避免把用户已删除的仓库重新 clone 回来
         let configured = {
             let conn = lock(&state.conn);
             let src: String = conn
                 .query_row(
-                    "SELECT source FROM repos WHERE id = ?1",
+                    "SELECT source FROM repos WHERE id = ?1 AND hidden = 0",
                     params![id],
                     |r| r.get(0),
                 )
@@ -581,6 +583,40 @@ mod tests {
             results,
             vec![("r1".to_string(), false), ("nope".to_string(), false)]
         );
+        let n: i64 = {
+            let conn = lock(&state.conn);
+            conn.query_row("SELECT COUNT(*) FROM sync_jobs", [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(n, 0, "未产生任何同步任务");
+        drop(state);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// enqueue_syncs：物理仓库已不存在（hidden = 1）的仓库跳过，
+    /// 不会被重新 clone 回来
+    #[test]
+    fn enqueue_syncs_skips_hidden_repo() {
+        let root = std::env::temp_dir().join(format!("grs-enq-hidden-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&root).unwrap();
+        let state = Arc::new(AppState::open(root.join("app.db")).unwrap());
+        {
+            let conn = lock(&state.conn);
+            // 配置齐全但物理仓库已被删除的登记项
+            conn.execute(
+                "INSERT INTO repos (id, name, source, hidden) VALUES ('r1', 'r1', 'https://src/r1.git', 1)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO sync_targets (repo_id, remote, url) VALUES ('r1', 'backup', 'https://bak/r1.git')",
+                [],
+            )
+            .unwrap();
+        }
+        let ids = ["r1".to_string()];
+        let results = enqueue_syncs(&state, &ids, "test", crate::lang::Lang::Zh);
+        assert_eq!(results, vec![("r1".to_string(), false)], "隐藏仓库不应启动同步");
         let n: i64 = {
             let conn = lock(&state.conn);
             conn.query_row("SELECT COUNT(*) FROM sync_jobs", [], |r| r.get(0))

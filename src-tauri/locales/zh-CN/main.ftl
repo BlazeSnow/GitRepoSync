@@ -48,6 +48,7 @@ manually-stopped = 已手动停止
 git-spawn-error = 无法启动 git：{$err}（请确认系统已安装 Git 并加入 PATH）
 sync-unconfigured = 源地址或目标地址未配置
 log-repo-discovered = 自动发现并登记仓库「{$name}」
+log-repo-removed = 物理仓库「{$name}」已不存在，已从仓库列表移除（不再同步）
 
 git-timeout = git 命令超时（{$secs} 秒）
 warn-submodule = ⚠ submodule 更新失败，已跳过：{$err}

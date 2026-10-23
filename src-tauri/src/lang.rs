@@ -138,7 +138,7 @@ mod tests {
         assert_eq!(tr(Lang::Zh, "repo-not-found"), "仓库不存在");
         assert_eq!(tr(Lang::En, "repo-not-found"), "Repository not found");
         assert!(
-            tr_a(Lang::Zh, "log-repo-added", &[("name", "demo")]).contains("demo"),
+            tr_a(Lang::Zh, "log-repo-discovered", &[("name", "demo")]).contains("demo"),
             "参数被替换进文案"
         );
         // 双语言包均缺失的键：En 回落 zh-CN，两者行为一致

@@ -27,21 +27,6 @@ pub(super) fn tools_list(lang: Lang) -> Value {
                 "inputSchema": { "type": "object", "properties": {} }
             },
             {
-                "name": "add_repo",
-                "description": tr(lang, "tool-add-repo"),
-                "inputSchema": { "type": "object", "properties": {} }
-            },
-            {
-                "name": "update_repo",
-                "description": tr(lang, "tool-update-repo"),
-                "inputSchema": { "type": "object", "properties": {} }
-            },
-            {
-                "name": "remove_repo",
-                "description": tr(lang, "tool-remove-repo"),
-                "inputSchema": { "type": "object", "properties": {} }
-            },
-            {
                 "name": "sync_repo",
                 "description": tr(lang, "tool-sync-repo"),
                 "inputSchema": {
@@ -178,19 +163,6 @@ pub(super) fn tools_call(
                 .unwrap_or(200)
                 .clamp(1, 1000);
             list_logs_value(state, limit)
-        }
-        // 仓库配置只读：三个历史管理工具保留名称作为兼容入口，调用返回
-        // 对应的 git 操作指引（用户自行 clone / git remote 管理远端）
-        "add_repo" | "update_repo" | "remove_repo" => {
-            let base_dir = state
-                .get_setting("base_dir")
-                .unwrap_or_else(crate::state::default_base_dir);
-            let key = match name {
-                "update_repo" => "mcp-help-update-repo",
-                "remove_repo" => "mcp-help-remove-repo",
-                _ => "mcp-help-add-repo",
-            };
-            Ok(json!(tr_a(lang, key, &[("base_dir", &base_dir)])))
         }
         "sync_repo" => {
             let id = args
@@ -373,11 +345,6 @@ mod tests {
         serde_json::from_str(&text).map_err(|e| (-32603, e.to_string()))
     }
 
-    fn count(state: &AppState, sql: &str, id: &str) -> i64 {
-        let conn = lock(&state.conn);
-        conn.query_row(sql, params![id], |r| r.get(0)).unwrap()
-    }
-
     /// list_logs：按时间倒序返回操作日志，limit 生效（直接插入日志行：
     /// 仓库变更类 MCP 工具已只读化，不再产生日志）
     #[test]
@@ -421,34 +388,26 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
-    /// 仓库配置只读：add_repo / update_repo / remove_repo 保留名称作为
-    /// 兼容入口，调用返回对应的 git 操作指引且不改任何数据
+    /// 已移除的仓库配置管理工具（add_repo / update_repo / remove_repo）：
+    /// 不再出现在工具清单中，调用时按未知工具拒绝
     #[test]
-    fn mcp_repo_tools_return_help() {
+    fn removed_repo_tools_are_gone() {
         let (state, root) = open_state();
+        let list = tools_list(Lang::Zh);
+        let names: Vec<&str> = list["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names.len(), 9, "工具清单应为 9 个");
         for tool in ["add_repo", "update_repo", "remove_repo"] {
-            let envelope = tools_call(
-                &state,
-                Lang::Zh,
-                &json!({ "name": tool, "arguments": { "id": "x", "name": "x" } }),
-            )
-            .unwrap();
-            assert_eq!(envelope["isError"], json!(false), "{tool} 应成功返回指引");
-            let text = envelope["content"][0]["text"].as_str().unwrap();
-            assert!(text.contains("sync_repo"), "{tool} 指引应引导使用同步工具: {text}");
-            if tool != "remove_repo" {
-                // 退登记指引不涉及远端操作
-                assert!(text.contains("git remote"), "{tool} 指引应包含 git 操作说明: {text}");
-            }
+            assert!(!names.contains(&tool), "{tool} 不应再出现在工具清单中");
+            assert!(
+                call(&state, tool, json!({})).is_err(),
+                "{tool} 应按未知工具拒绝"
+            );
         }
-        // 未产生任何数据变更
-        let repos = call(&state, "list_repos", json!({})).unwrap();
-        assert_eq!(repos.as_array().unwrap().len(), 0);
-        let jobs: i64 = {
-            let conn = lock(&state.conn);
-            conn.query_row("SELECT COUNT(*) FROM sync_jobs", [], |r| r.get(0)).unwrap()
-        };
-        assert_eq!(jobs, 0);
         std::fs::remove_dir_all(&root).ok();
     }
 

@@ -79,8 +79,8 @@ export const en = {
   mcpColTool: "Tool",
   mcpColDesc: "Description",
   toolListRepos: "List all configured sync repositories with their latest sync status",
-  toolDiscoverRepos:
-    "Scan the first-level subdirectories of the base directory (staging directory) and register the git repositories found: the origin remote becomes the source, all other remotes become backup targets; returns the full repository list after registration",
+  toolUpdateRepos:
+    "Scan the first-level subdirectories of the base directory (staging directory) and update the repository registry: newly found git repositories are registered, and registered repositories have their source and backup targets aligned with the current git configuration (the origin remote becomes the source, all other remotes become backup targets); returns the full repository list after the update",
   toolSyncRepo: "Start syncing the specified repository immediately (async)",
   toolSyncRepos:
     "Trigger batch syncs: provide ids to sync a list, or days for a range (0 = all repositories, N = not synced within the last N days, including never synced, matching the app's range); unconfigured repositories are skipped, ids takes precedence when both are given. Async; use get_sync_status to check progress",

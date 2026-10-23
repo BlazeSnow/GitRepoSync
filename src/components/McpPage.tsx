@@ -41,7 +41,7 @@ export function McpPage({ token }: { token: string }) {
 
   const tools: { name: string; description: string }[] = [
     { name: "list_repos", description: t("toolListRepos") },
-    { name: "discover_repos", description: t("toolDiscoverRepos") },
+    { name: "update_repos", description: t("toolUpdateRepos") },
     { name: "sync_repo", description: t("toolSyncRepo") },
     { name: "sync_repos", description: t("toolSyncRepos") },
     { name: "stop_syncs", description: t("toolStopSyncs") },

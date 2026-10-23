@@ -33,7 +33,7 @@ it("渲染 API Key、客户端配置示例与全部 9 个工具", async () => {
 
   for (const tool of [
     "list_repos",
-    "discover_repos",
+    "update_repos",
     "sync_repo",
     "sync_repos",
     "stop_syncs",

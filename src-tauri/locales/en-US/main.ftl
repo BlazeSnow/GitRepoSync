@@ -47,8 +47,6 @@ lfs-skipped = git-lfs not detected; skipped LFS update
 manually-stopped = Manually stopped
 git-spawn-error = Failed to launch git: {$err} (make sure Git is installed and on PATH)
 sync-unconfigured = Source or target URL is not configured
-log-repo-discovered = Discovered and registered repository "{$name}"
-log-repo-removed = Physical repository "{$name}" no longer exists; removed from the repository list (no longer synced)
 
 git-timeout = git command timed out ({$secs} s)
 warn-submodule = ⚠ submodule update failed, skipped: {$err}
@@ -81,14 +79,13 @@ log-mcp-base-dir-changed = Changed repository base directory to {$dir} via MCP
 
 # ---------- MCP tool descriptions ----------
 tool-list-repos = List all configured sync repositories with their latest sync status
-tool-update-repos = Scan the first-level subdirectories of the base directory (staging directory) and update the repository registry: newly found git repositories are registered, and registered repositories have their source and backup targets aligned with the current git configuration (the origin remote becomes the source, all other remotes become backup targets); returns the full repository list after the update
 tool-sync-repo = Start syncing the specified repository immediately (async; use get_sync_status to check progress)
-tool-sync-repo-id = Repository ID
+tool-sync-repo-name = Repository name (the directory name under the base directory)
 tool-sync-repos = Trigger batch syncs: provide ids to sync a list, or days for a range (0 = all repositories, N = not synced within the last N days, including never synced, matching the app's range); unconfigured repositories are skipped, ids takes precedence when both are given. Async; use get_sync_status to check progress
-tool-sync-repos-ids = Repository ID list (optional)
+tool-sync-repos-names = Repository name list (optional)
 tool-sync-repos-days = Sync range in days (optional; 0 = all, N = not synced within the last N days, including never synced)
 tool-stop-syncs = Stop syncing: terminate queued and running sync jobs (works across processes)
-tool-stop-syncs-ids = Repository ids to stop; omit to stop all active jobs
+tool-stop-syncs-names = Repository names to stop; omit to stop all active jobs
 tool-get-sync-status = Query the latest sync status of all repositories
 tool-list-logs = List the operation log newest first (action, operator, time)
 tool-list-logs-limit = Maximum number of entries to return (optional, default 200, max 1000)

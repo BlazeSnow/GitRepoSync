@@ -4,11 +4,11 @@
 fluent_i18n::i18n!("locales", fallback = "zh-CN");
 
 mod auth;
-mod discover;
 mod git;
 mod lang;
 mod mcp;
 mod repos;
+mod scan;
 mod settings;
 mod state;
 mod sync;
@@ -73,7 +73,6 @@ fn main() {
             auth::logout,
             auth::change_password,
             repos::list_repos,
-            repos::discover_repos,
             repos::open_repo_dir,
             sync::start_sync,
             sync::stop_sync,

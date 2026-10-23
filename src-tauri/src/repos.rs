@@ -1,66 +1,26 @@
-//! 仓库的 Tauri 命令：列表（含自动发现）与打开目录。
+//! 仓库的 Tauri 命令：列出（实时扫描基地址得到的真实列表）与打开目录。
 //! 仓库配置只读：源与目标由 .git/config 派生（origin 为源、其余非
 //! upstream 远端为目标），由用户自行用 git remote 管理，软件不代管。
-//! 同步任务见 sync.rs；发现逻辑见 discover.rs。
+//! 同步任务见 sync.rs；扫描逻辑见 scan.rs。
 
 use crate::auth::require_session;
-use crate::discover::discover;
-use crate::lang::{gui_lang, tr, tr_a, Lang};
-use crate::state::{lock, repo_from_row, AppState, Repo, REPO_COLS};
-use rusqlite::params;
+use crate::lang::{gui_lang, tr_a, Lang};
+use crate::scan;
+use crate::state::{AppState, Repo};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::State;
 
+/// 列出仓库：实时扫描基地址得到的真实列表（物理目录在就在，目录消失即消失）
 #[tauri::command]
 pub fn list_repos(state: State<'_, Arc<AppState>>, token: String) -> Result<Vec<Repo>, String> {
     require_session(&state, &token)?;
-    let conn = lock(&state.conn);
-    let mut stmt = conn
-        .prepare(&format!(
-            "SELECT {REPO_COLS} FROM repos WHERE hidden = 0 ORDER BY name"
-        ))
-        .map_err(|e| e.to_string())?;
-    let mut repos = stmt
-        .query_map([], repo_from_row)
-        .map_err(|e| e.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
-    crate::state::attach_targets(&conn, &mut repos);
-    Ok(repos)
-}
-
-/// 主界面加载入口：先自动发现基地址内仓库，再返回最新列表
-#[tauri::command]
-pub fn discover_repos(state: State<'_, Arc<AppState>>, token: String) -> Result<Vec<Repo>, String> {
-    let username = require_session(&state, &token)?;
-    let lang = gui_lang();
-    discover(&state, &username, lang)?;
-    let conn = lock(&state.conn);
-    let mut stmt = conn
-        .prepare(&format!(
-            "SELECT {REPO_COLS} FROM repos WHERE hidden = 0 ORDER BY name"
-        ))
-        .map_err(|e| e.to_string())?;
-    let mut repos = stmt
-        .query_map([], repo_from_row)
-        .map_err(|e| e.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
-    crate::state::attach_targets(&conn, &mut repos);
-    Ok(repos)
+    Ok(scan::list_repos(state.inner()))
 }
 
 /// 解析仓库的本地中转目录（{基地址}/{仓库名}）并检查存在性；
 /// 独立成函数便于单测（不实际拉起文件管理器）
-fn resolve_repo_dir(state: &AppState, id: &str, lang: Lang) -> Result<PathBuf, String> {
-    let name: String = {
-        let conn = lock(&state.conn);
-        conn.query_row("SELECT name FROM repos WHERE id = ?1", params![id], |r| {
-            r.get(0)
-        })
-        .map_err(|_| tr(lang, "repo-not-found"))?
-    };
+fn resolve_repo_dir(state: &AppState, name: &str, lang: Lang) -> Result<PathBuf, String> {
     let base_dir = state
         .get_setting("base_dir")
         .unwrap_or_else(crate::state::default_base_dir);
@@ -80,10 +40,10 @@ fn resolve_repo_dir(state: &AppState, id: &str, lang: Lang) -> Result<PathBuf, S
 pub fn open_repo_dir(
     state: State<'_, Arc<AppState>>,
     token: String,
-    id: String,
+    name: String,
 ) -> Result<(), String> {
     require_session(&state, &token)?;
-    let dir = resolve_repo_dir(state.inner(), &id, gui_lang())?;
+    let dir = resolve_repo_dir(state.inner(), &name, gui_lang())?;
     tauri_plugin_opener::open_path(&dir, None::<&str>).map_err(|e| e.to_string())
 }
 
@@ -100,62 +60,48 @@ mod tests {
         assert!(!d.starts_with('~'));
     }
 
-    /// open_repo_dir 的目录解析：存在返回路径、缺失与未知 id 报错
-    /// （只测解析，不实际拉起文件管理器）
+    /// open_repo_dir 的目录解析：存在返回路径、缺失报错（只测解析，不实际拉起文件管理器）
     #[test]
     fn resolve_repo_dir_checks_existence() {
         let (app, state, root) = open_mock_app("opendir");
         let base = root.join("base");
         std::fs::create_dir_all(base.join("demo")).unwrap();
         state.set_setting("base_dir", &base.to_string_lossy());
-        {
-            let conn = lock(&state.conn);
-            conn.execute(
-                "INSERT INTO repos (id, name, source) VALUES ('r1', 'demo', 'https://src/demo.git')",
-                [],
-            )
-            .unwrap();
-        }
         assert_eq!(
-            resolve_repo_dir(&state, "r1", crate::lang::Lang::Zh).unwrap(),
+            resolve_repo_dir(&state, "demo", crate::lang::Lang::Zh).unwrap(),
             base.join("demo")
         );
         // 目录缺失（尚未克隆）报错
         std::fs::remove_dir_all(base.join("demo")).unwrap();
-        assert!(resolve_repo_dir(&state, "r1", crate::lang::Lang::Zh).is_err());
-        // 未知 id 报“仓库不存在”
-        assert!(resolve_repo_dir(&state, "nope", crate::lang::Lang::Zh).is_err());
+        assert!(resolve_repo_dir(&state, "demo", crate::lang::Lang::Zh).is_err());
 
         drop(app);
         drop(state);
         std::fs::remove_dir_all(&root).ok();
     }
 
-    /// list_repos：隐藏仓库不出现；无效令牌拒绝（删除/编辑入口已随
-    /// 仓库代管一起移除，列表为纯只读视图）
+    /// list_repos：返回扫描得到的真实列表；无效令牌拒绝
     #[test]
-    fn list_repos_excludes_hidden_and_requires_session() {
+    fn list_repos_requires_session() {
         use tauri::Manager;
 
         let (app, state, root) = open_mock_app("repos");
         let st = app.state::<Arc<AppState>>();
         insert_session(state.as_ref(), "tok");
-        {
-            let conn = lock(&state.conn);
-            conn.execute(
-                "INSERT INTO repos (id, name, source, hidden) VALUES ('r1', 'demo', 'https://src/demo.git', 0)",
-                [],
-            )
-            .unwrap();
-            conn.execute(
-                "INSERT INTO repos (id, name, source, hidden) VALUES ('r2', 'hidden-repo', 'https://src/h.git', 1)",
-                [],
-            )
-            .unwrap();
-        }
+        // 基地址下一个 git 仓库
+        let base = root.join("base");
+        std::fs::create_dir_all(base.join("demo/.git")).unwrap();
+        std::fs::write(
+            base.join("demo/.git/config"),
+            "[remote \"origin\"]\n\turl = https://github.com/u/demo.git\n",
+        )
+        .unwrap();
+        state.set_setting("base_dir", &base.to_string_lossy());
+
         let repos = list_repos(st.clone(), "tok".into()).unwrap();
-        assert_eq!(repos.len(), 1, "隐藏仓库不应出现在列表");
+        assert_eq!(repos.len(), 1, "扫描到基地址内的 git 仓库");
         assert_eq!(repos[0].name, "demo");
+        assert_eq!(repos[0].source, "https://github.com/u/demo.git");
         assert!(list_repos(st.clone(), "bad-token".into()).is_err(), "无效令牌应拒绝");
 
         drop(st);

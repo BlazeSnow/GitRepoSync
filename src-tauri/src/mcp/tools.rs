@@ -1,10 +1,10 @@
 //! MCP 工具层：tools/list 的工具清单（名称为协议契约，描述按会话语言返回）
-//! 与 tools/call 的分发实现。仓库/日志读写直接走 AppState 的 SQLite，
-//! 同步触发复用 crate::sync 的队列；发现复用 crate::discover。
+//! 与 tools/call 的分发实现。仓库列表走 crate::scan 的实时扫描，
+//! 日志读写直接走 AppState 的 SQLite，同步触发复用 crate::sync 的队列。
 
-use crate::discover;
 use crate::lang::{tr, tr_a, Lang};
-use crate::state::{lock, normalize_base_dir, repo_from_row, AppState, OperationLog, REPO_COLS};
+use crate::scan;
+use crate::state::{lock, normalize_base_dir, AppState, OperationLog};
 use crate::sync;
 use rusqlite::params;
 use serde_json::{json, Value};
@@ -22,17 +22,12 @@ pub(super) fn tools_list(lang: Lang) -> Value {
                 "inputSchema": { "type": "object", "properties": {} }
             },
             {
-                "name": "update_repos",
-                "description": tr(lang, "tool-update-repos"),
-                "inputSchema": { "type": "object", "properties": {} }
-            },
-            {
                 "name": "sync_repo",
                 "description": tr(lang, "tool-sync-repo"),
                 "inputSchema": {
                     "type": "object",
-                    "properties": { "id": { "type": "string", "description": tr(lang, "tool-sync-repo-id") } },
-                    "required": ["id"]
+                    "properties": { "name": { "type": "string", "description": tr(lang, "tool-sync-repo-name") } },
+                    "required": ["name"]
                 }
             },
             {
@@ -41,10 +36,10 @@ pub(super) fn tools_list(lang: Lang) -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "ids": {
+                        "names": {
                             "type": "array",
                             "items": { "type": "string" },
-                            "description": tr(lang, "tool-sync-repos-ids")
+                            "description": tr(lang, "tool-sync-repos-names")
                         },
                         "days": {
                             "type": "integer",
@@ -59,10 +54,10 @@ pub(super) fn tools_list(lang: Lang) -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "ids": {
+                        "names": {
                             "type": "array",
                             "items": { "type": "string" },
-                            "description": tr(lang, "tool-stop-syncs-ids")
+                            "description": tr(lang, "tool-stop-syncs-names")
                         }
                     }
                 }
@@ -100,20 +95,9 @@ pub(super) fn tools_list(lang: Lang) -> Value {
     })
 }
 
+/// 仓库列表：实时扫描基地址得到的真实列表（物理目录在就在）
 fn list_repos_value(state: &AppState) -> Result<Value, String> {
-    let conn = lock(&state.conn);
-    let mut stmt = conn
-        .prepare(&format!(
-            "SELECT {REPO_COLS} FROM repos WHERE hidden = 0 ORDER BY name"
-        ))
-        .map_err(|e| e.to_string())?;
-    let mut repos = stmt
-        .query_map([], repo_from_row)
-        .map_err(|e| e.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
-    crate::state::attach_targets(&conn, &mut repos);
-    serde_json::to_value(repos).map_err(|e| e.to_string())
+    serde_json::to_value(scan::list_repos(state)).map_err(|e| e.to_string())
 }
 
 /// 按时间倒序列出操作日志（limit 已由调用方钳制）
@@ -150,12 +134,6 @@ pub(super) fn tools_call(
 
     let result: Result<Value, String> = match name {
         "list_repos" | "get_sync_status" => list_repos_value(state),
-        "update_repos" => {
-            // 扫描基地址（中转站目录）更新仓库登记状态：新增仓库登记入列，
-            // 已登记仓库的源地址与备份目标对齐到当前 git 配置；与界面加载
-            // 逻辑一致，新登记的仓库以 mcp 为操作人写入日志；返回更新后的完整列表
-            discover::discover(state, OPERATOR, lang).and_then(|()| list_repos_value(state))
-        }
         "list_logs" => {
             // 只读操作不写日志（与 list_repos 一致），避免读取行为自我刷屏
             let limit = args
@@ -166,55 +144,36 @@ pub(super) fn tools_call(
             list_logs_value(state, limit)
         }
         "sync_repo" => {
-            let id = args
-                .get("id")
+            let repo_name = args
+                .get("name")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            let (exists, source, target_n) = {
-                let conn = lock(&state.conn);
-                let source: String = conn
-                    .query_row(
-                        "SELECT source FROM repos WHERE id = ?1",
-                        params![id],
-                        |r| r.get(0),
-                    )
-                    .unwrap_or_default();
-                let n: i64 = conn
-                    .query_row(
-                        "SELECT COUNT(*) FROM sync_targets WHERE repo_id = ?1",
-                        params![id],
-                        |r| r.get(0),
-                    )
-                    .unwrap_or(0);
-                let exists: i64 = conn
-                    .query_row(
-                        "SELECT COUNT(*) FROM repos WHERE id = ?1",
-                        params![id],
-                        |r| r.get(0),
-                    )
-                    .unwrap_or(0);
-                (exists > 0, source, n)
-            };
-            if !exists {
+            // 配置实时扫描：仓库不存在（物理目录已消失）时直接拒绝
+            let base_dir = state
+                .get_setting("base_dir")
+                .unwrap_or_else(crate::state::default_base_dir);
+            let Some(scanned) =
+                scan::scan_one(std::path::Path::new(&base_dir), &repo_name)
+            else {
                 return Err((-32602, tr(lang, "repo-not-found")));
-            }
-            if source.is_empty() {
+            };
+            if scanned.source.is_empty() {
                 return Err((-32602, tr(lang, "sync-no-source")));
             }
-            if target_n == 0 {
+            if scanned.targets.is_empty() {
                 return Err((-32602, tr(lang, "sync-no-targets")));
             }
-            let results = sync::enqueue_syncs(state, std::slice::from_ref(&id), OPERATOR, lang);
+            let results = sync::enqueue_syncs(state, std::slice::from_ref(&repo_name), OPERATOR, lang);
             let started = results.first().map(|(_, s)| *s).unwrap_or(false);
             state.add_log(&tr(lang, "log-mcp-sync"), OPERATOR);
             Ok(json!({ "started": started }))
         }
         "sync_repos" => {
-            // 选择器二选一：ids 显式列表优先；否则 days 范围（0=全部，N=最近 N 天未同步，
+            // 选择器二选一：names 显式列表优先；否则 days 范围（0=全部，N=最近 N 天未同步，
             // 与界面范围下拉语义一致）。两者皆缺拒绝，避免误触发全量同步
-            let ids_opt: Option<Vec<String>> = args
-                .get("ids")
+            let names_opt: Option<Vec<String>> = args
+                .get("names")
                 .and_then(|v| v.as_array())
                 .map(|arr| {
                     arr.iter()
@@ -222,20 +181,18 @@ pub(super) fn tools_call(
                         .collect()
                 });
             let days_opt = args.get("days").and_then(|v| v.as_i64());
-            let ids = match (ids_opt, days_opt) {
-                (Some(ids), _) if !ids.is_empty() => ids,
+            let names = match (names_opt, days_opt) {
+                (Some(names), _) if !names.is_empty() => names,
                 (Some(_), None) => {
                     return Err((-32602, tr(lang, "sync-ids-empty")));
                 }
-                (_, Some(days)) => {
-                    sync::select_stale_ids(state, days).map_err(|e| (-32602, e))?
-                }
+                (_, Some(days)) => sync::select_stale_names(state, days),
                 (None, None) => {
                     return Err((-32602, tr(lang, "sync-repos-no-selector")));
                 }
             };
             // 未配置 / 已在同步的仓库报告未启动；真实同步由执行者串行消费
-            let results = sync::enqueue_syncs(state, &ids, OPERATOR, lang);
+            let results = sync::enqueue_syncs(state, &names, OPERATOR, lang);
             let started = results.iter().filter(|(_, s)| *s).count();
             if started > 0 {
                 state.add_log(
@@ -248,24 +205,24 @@ pub(super) fn tools_call(
                 );
             }
             Ok(json!({
-                "requested": ids.len(),
+                "requested": names.len(),
                 "started": started,
                 "results": results
                     .iter()
-                    .map(|(id, s)| json!({ "id": id, "started": s }))
+                    .map(|(name, s)| json!({ "name": name, "started": s }))
                     .collect::<Vec<_>>(),
             }))
         }
         "stop_syncs" => {
-            let ids_opt: Option<Vec<String>> = args
-                .get("ids")
+            let names_opt: Option<Vec<String>> = args
+                .get("names")
                 .and_then(|v| v.as_array())
                 .map(|arr| {
                     arr.iter()
                         .filter_map(|x| x.as_str().map(str::to_string))
                         .collect()
                 });
-            let (dequeued, flagged) = sync::stop_jobs(state, ids_opt.as_deref());
+            let (dequeued, flagged) = sync::stop_jobs(state, names_opt.as_deref());
             if !dequeued.is_empty() || !flagged.is_empty() {
                 state.add_log(&tr(lang, "log-sync-stopped-cmd"), OPERATOR);
             }
@@ -389,7 +346,7 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
-    /// 已移除的仓库配置管理工具（add_repo / update_repo / remove_repo）：
+    /// 已移除的工具（add_repo / update_repo / remove_repo / update_repos）：
     /// 不再出现在工具清单中，调用时按未知工具拒绝
     #[test]
     fn removed_repo_tools_are_gone() {
@@ -401,8 +358,8 @@ mod tests {
             .iter()
             .map(|t| t["name"].as_str().unwrap())
             .collect();
-        assert_eq!(names.len(), 9, "工具清单应为 9 个");
-        for tool in ["add_repo", "update_repo", "remove_repo"] {
+        assert_eq!(names.len(), 8, "工具清单应为 8 个");
+        for tool in ["add_repo", "update_repo", "remove_repo", "update_repos"] {
             assert!(!names.contains(&tool), "{tool} 不应再出现在工具清单中");
             assert!(
                 call(&state, tool, json!({})).is_err(),
@@ -413,30 +370,33 @@ mod tests {
     }
 
     /// sync_repo 只验证拒绝路径（有效路径会拉起真实 git 同步，不在单测覆盖）：
-    /// 仓库不存在 / 无源地址 / 无备份目标均拒绝且不启动同步
+    /// 仓库不存在（物理目录缺失）/ 无源地址 / 无备份目标均拒绝且不启动同步
     #[test]
     fn mcp_sync_repo_rejects_unconfigured() {
         let (state, root) = open_state();
+        let base = root.join("base");
+        state.set_setting("base_dir", &base.to_string_lossy());
+        // 仓库不存在（基地址下无该目录）
         assert!(
-            call(&state, "sync_repo", json!({ "id": "nope" })).is_err(),
+            call(&state, "sync_repo", json!({ "name": "nope" })).is_err(),
             "仓库不存在"
         );
-        {
-            let conn = lock(&state.conn);
-            conn.execute(
-                "INSERT INTO repos (id, name, source) VALUES ('r1', 'r1', '')",
-                [],
-            )
-            .unwrap();
-            conn.execute(
-                "INSERT INTO repos (id, name, source) VALUES ('r2', 'r2', 'https://src/r2.git')",
-                [],
-            )
-            .unwrap();
-        }
-        assert!(call(&state, "sync_repo", json!({ "id": "r1" })).is_err(), "无源地址");
+        // 无源地址：仓库目录存在但 config 里没有 origin
+        std::fs::create_dir_all(base.join("nosource/.git")).unwrap();
+        std::fs::write(base.join("nosource/.git/config"), "[core]\n\tbare = false\n").unwrap();
         assert!(
-            call(&state, "sync_repo", json!({ "id": "r2" })).is_err(),
+            call(&state, "sync_repo", json!({ "name": "nosource" })).is_err(),
+            "无源地址"
+        );
+        // 无备份目标：只有 origin
+        std::fs::create_dir_all(base.join("notarget/.git")).unwrap();
+        std::fs::write(
+            base.join("notarget/.git/config"),
+            "[remote \"origin\"]\n\turl = https://src/notarget.git\n",
+        )
+        .unwrap();
+        assert!(
+            call(&state, "sync_repo", json!({ "name": "notarget" })).is_err(),
             "无备份目标"
         );
         // 三次拒绝均未入队：任务表保持为空
@@ -450,7 +410,8 @@ mod tests {
     }
 
     /// sync_repo 端到端：经由工具层投递任务、执行者消费执行真实流水线，
-    /// 目标 bare 仓库推进到源 HEAD，操作人以 mcp 记录
+    /// 目标 bare 仓库推进到源 HEAD，操作人以 mcp 记录。
+    /// 前提：中转目录由用户自行克隆并配置好远端（软件不代管远端）
     #[test]
     fn mcp_sync_repo_executes_end_to_end() {
         use std::time::{Duration, Instant};
@@ -478,21 +439,18 @@ mod tests {
         git(&["init", "-q", "--bare", target.to_str().unwrap()], &root);
 
         state.set_setting("base_dir", &base.to_string_lossy());
-        {
-            let conn = lock(&state.conn);
-            conn.execute(
-                "INSERT INTO repos (id, name, source) VALUES ('r1', 'demo', ?1)",
-                params![source.to_string_lossy()],
-            )
-            .unwrap();
-            conn.execute(
-                "INSERT INTO sync_targets (repo_id, remote, url) VALUES ('r1', 'backup', ?1)",
-                params![target.to_string_lossy()],
-            )
-            .unwrap();
-        }
+        // 用户自行克隆到中转目录并添加备份远端
+        std::fs::create_dir_all(&base).unwrap();
+        git(
+            &["clone", "-q", source.to_str().unwrap(), base.join("demo").to_str().unwrap()],
+            &root,
+        );
+        git(
+            &["remote", "add", "backup", target.to_str().unwrap()],
+            &base.join("demo"),
+        );
 
-        let r = call(&state, "sync_repo", json!({ "id": "r1" })).unwrap();
+        let r = call(&state, "sync_repo", json!({ "name": "demo" })).unwrap();
         assert_eq!(r["started"], json!(true), "已配置仓库应成功投递");
 
         // 轮询：任务被消费、状态成功
@@ -504,7 +462,9 @@ mod tests {
                     .query_row("SELECT COUNT(*) FROM sync_jobs", [], |r| r.get(0))
                     .unwrap_or(-1);
                 let status: String = conn
-                    .query_row("SELECT last_status FROM repos WHERE id = 'r1'", [], |r| r.get(0))
+                    .query_row("SELECT last_status FROM repo_state WHERE name = 'demo'", [], |r| {
+                        r.get(0)
+                    })
                     .unwrap_or_default();
                 (jobs, status)
             };
@@ -542,9 +502,9 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
-    /// update_repos：扫描基地址更新仓库登记状态并返回列表，重复调用幂等
+    /// list_repos：扫描基地址返回真实列表，重复调用幂等
     #[test]
-    fn update_repos_scans_base_dir() {
+    fn list_repos_scans_base_dir() {
         let (state, root) = open_state();
         // 基地址内放一个带 origin + backup 远端的 git 仓库（仅 .git/config，无需真实 git）
         let base = root.join("base");
@@ -557,7 +517,7 @@ mod tests {
         .unwrap();
         state.set_setting("base_dir", &base.to_string_lossy());
 
-        let repos = call(&state, "update_repos", json!({})).unwrap();
+        let repos = call(&state, "list_repos", json!({})).unwrap();
         let arr = repos.as_array().unwrap();
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0]["name"], json!("alpha"));
@@ -567,7 +527,7 @@ mod tests {
         assert_eq!(targets[0]["remote"], json!("backup"));
 
         // 幂等：再次扫描不产生重复
-        let again = call(&state, "update_repos", json!({})).unwrap();
+        let again = call(&state, "list_repos", json!({})).unwrap();
         assert_eq!(again.as_array().unwrap().len(), 1);
         std::fs::remove_dir_all(&root).ok();
     }
@@ -576,15 +536,19 @@ mod tests {
     #[test]
     fn mcp_sync_repos_requires_selector_and_reports_results() {
         let (state, root) = open_state();
-        // 无 ids 且无 days：拒绝
+        // 隔离基地址：避免扫到真实仓库目录
+        let base = root.join("base");
+        std::fs::create_dir_all(&base).unwrap();
+        state.set_setting("base_dir", &base.to_string_lossy());
+        // 无 names 且无 days：拒绝
         assert!(call(&state, "sync_repos", json!({})).is_err());
-        // 空 ids 且无 days：拒绝
-        assert!(call(&state, "sync_repos", json!({ "ids": [] })).is_err());
-        // ids 列表：不存在与未配置的仓库均报告未启动
-        let r = call(&state, "sync_repos", json!({ "ids": ["nope"] })).unwrap();
+        // 空 names 且无 days：拒绝
+        assert!(call(&state, "sync_repos", json!({ "names": [] })).is_err());
+        // names 列表：不存在与未配置的仓库均报告未启动
+        let r = call(&state, "sync_repos", json!({ "names": ["nope"] })).unwrap();
         assert_eq!(r["requested"], json!(1));
         assert_eq!(r["started"], json!(0));
-        assert_eq!(r["results"][0]["id"], json!("nope"));
+        assert_eq!(r["results"][0]["name"], json!("nope"));
         assert_eq!(r["results"][0]["started"], json!(false));
         // days 范围：当前无任何已配置仓库，不启动任何同步
         let r = call(&state, "sync_repos", json!({ "days": 0 })).unwrap();
@@ -600,37 +564,37 @@ mod tests {
     }
 
     /// stop_syncs：排队任务直接出队、运行中任务写停止标记（跨进程语义），
-    /// 未指定 ids 时作用于全部活动任务
+    /// 未指定 names 时作用于全部活动任务
     #[test]
     fn stop_syncs_tool_dequeues_and_flags() {
         let (state, root) = open_state();
         // 直接插入任务行（不竞选执行者，避免 worker 拉起真实同步）
         {
             let conn = lock(&state.conn);
-            for (id, st) in [("r1", "running"), ("r2", "queued")] {
+            for (name, st) in [("r1", "running"), ("r2", "queued")] {
                 conn.execute(
-                    "INSERT INTO sync_jobs (repo_id, operator, lang, state, created_at)
+                    "INSERT INTO sync_jobs (repo_name, operator, lang, state, created_at)
                      VALUES (?1, 'mcp', 'zh', ?2, 0)",
-                    rusqlite::params![id, st],
+                    rusqlite::params![name, st],
                 )
                 .unwrap();
             }
         }
-        // 指定 ids：仅作用于 r2（排队 → 出队）
-        let r = call(&state, "stop_syncs", json!({ "ids": ["r2"] })).unwrap();
+        // 指定 names：仅作用于 r2（排队 → 出队）
+        let r = call(&state, "stop_syncs", json!({ "names": ["r2"] })).unwrap();
         assert_eq!(r["dequeued"], json!(["r2"]));
         assert_eq!(r["stopRequested"], json!([]));
-        let active = |id: &str| {
+        let active = |name: &str| {
             let conn = lock(&state.conn);
             conn.query_row(
-                "SELECT 1 FROM sync_jobs WHERE repo_id = ?1 AND state IN ('queued', 'running')",
-                params![id],
+                "SELECT 1 FROM sync_jobs WHERE repo_name = ?1 AND state IN ('queued', 'running')",
+                params![name],
                 |_| Ok(()),
             )
             .is_ok()
         };
         assert!(!active("r2"));
-        assert!(active("r1"), "运行中任务不受他人 ids 请求影响");
+        assert!(active("r1"), "运行中任务不受他人 names 请求影响");
 
         // 全部停止：运行中的 r1 被标记
         let r = call(&state, "stop_syncs", json!({})).unwrap();

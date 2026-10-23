@@ -140,6 +140,10 @@ fn handle_line_inner(
             }))
         }
         "ping" => Ok(json!({})),
+        // 帮助：与 CLI `--help` 同一份文本（help.rs），便于 Agent 客户端自助了解用法
+        "help" => Ok(json!({
+            "content": [ { "type": "text", "text": crate::help::help_text() } ]
+        })),
         "tools/list" => Ok(tools_list(*session_lang)),
         "tools/call" => tools_call(state, *session_lang, &params),
         other => Err((
@@ -232,6 +236,18 @@ mod tests {
         )
         .unwrap();
         assert!(resp.contains("\"result\""));
+        // help：返回与 CLI `--help` 相同的帮助文本
+        let resp = handle_line(
+            &state,
+            true,
+            &mut lang,
+            r#"{"jsonrpc":"2.0","id":5,"method":"help"}"#,
+        )
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&resp).unwrap();
+        let text = v["result"]["content"][0]["text"].as_str().unwrap();
+        assert_eq!(text, crate::help::help_text(), "MCP help 与 CLI --help 内容一致");
+        assert!(text.contains("MCP 工具（8 个）"), "帮助文本应反映当前工具清单");
         std::fs::remove_dir_all(&root).ok();
     }
 }

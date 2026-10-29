@@ -1,0 +1,8 @@
+[Desktop Entry]
+Categories=Development;Utility;
+Exec=git-repo-sync
+StartupWMClass=git-repo-sync
+Icon=GitRepoSync
+Name=GitRepoSync
+Terminal=false
+Type=Application

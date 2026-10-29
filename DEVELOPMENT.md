@@ -20,7 +20,7 @@ MCP 以 stdio 方式对外暴露 8 个工具（仓库列表、同步触发与停
 | 后端     | Rust                                                                    |
 | 前端 UI  | shadcn/ui（React + TypeScript + Tailwind CSS），i18n 采用 react-i18next，表格行重排动画采用 motion |
 | 数据库   | SQLite（rusqlite bundled，WAL 模式）                                    |
-| 打包发布 | GitHub Actions → GitHub Releases（支持 beta 版本）                      |
+| 打包发布 | GitHub Actions → GitHub Releases（支持 beta 版本）；Linux 的 deb / rpm 由 nfpm 产出，AppImage 由 Tauri 产出 |
 
 ## 3. 文档索引
 
@@ -59,7 +59,7 @@ cd src-tauri && cargo test               # 后端单元测试
 
 ```
 ├── .github/workflows/   # CI：release.yml（打 tag 发布）+ check.yml（PR 版本校验）
-├── ci/                  # CI 辅助脚本（版本一致性校验、Linux 依赖）
+├── ci/                  # CI 辅助脚本（版本一致性校验、Linux 依赖、Linux 打包 nfpm.yaml / linux-package.sh / linux/）
 ├── AGENTS.md            # 开发/Agent 约定（禁止修改）
 ├── CHANGELOG.md         # 变更记录（每完成一项功能后更新）
 ├── README.md            # 面向用户的项目说明（下载、上手、MCP 接入、FAQ）

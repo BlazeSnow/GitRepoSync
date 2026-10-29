@@ -1,0 +1,57 @@
+# nfpm 打包配置：Linux 的 deb / rpm 产物
+#
+# 为什么不直接用 Tauri 自带的 Linux 打包：
+#   Tauri CLI 2.12.4 起，tauri-bundler 改用 rpm crate 0.30 生成 RPM，
+#   该版本会严格校验 RPM Version 字符集（不允许 '-'），而本项目的版本号形如
+#   1.0.0-beta.7 含 '-'，导致 `tauri build` 在 RPM 阶段直接失败
+#   （invalid version "1.0.0-beta.7"），进而整个 Linux job 失败。
+#   nfpm 会把 semver 拆成 Version + Prerelease，生成 RPM/Debian 合法且排序正确的
+#   1.0.0~beta.7，与上游 Tauri v3 的 to_rpm_version 行为一致。
+#
+# AppImage 仍由 Tauri 产出（nfpm 不支持 AppImage）。
+# 字段说明：https://nfpm.goreleaser.com/usage/
+# 调用方：ci/linux-package.sh（注入 VERSION 环境变量并指定产物路径）
+
+name: GitRepoSync
+arch: amd64
+platform: linux
+
+# 软件版本（X.Y.Z 或 X.Y.Z-beta.N）。nfpm 会自动拆出预发布段：
+#   1.0.0-beta.7 -> Version=1.0.0、Prerelease=beta.7
+#   deb / rpm 内的版本字段因此为 1.0.0~beta.7（beta 正确排在正式版之前）
+version: ${VERSION}
+
+section: default
+priority: optional
+maintainer: BlazeSnow <BlazeSnow@users.noreply.github.com>
+vendor: BlazeSnow
+homepage: https://gitreposync.blazesnow.com/
+license: AGPL-3.0-only
+description: 跨平台 Git 仓库同步桌面工具
+
+contents:
+  # 可执行文件（与 Tauri 打包一致，取 crate 名）
+  - src: src-tauri/target/release/git-repo-sync
+    dst: /usr/bin/git-repo-sync
+  # 桌面项
+  - src: ci/linux/GitRepoSync.desktop
+    dst: /usr/share/applications/GitRepoSync.desktop
+  # 图标（hicolor 层级）
+  - src: src-tauri/icons/128x128.png
+    dst: /usr/share/icons/hicolor/128x128/apps/GitRepoSync.png
+  - src: src-tauri/icons/128x128@2x.png
+    dst: /usr/share/icons/hicolor/256x256/apps/GitRepoSync.png
+
+overrides:
+  deb:
+    depends:
+      - libwebkit2gtk-4.1-0
+      - libgtk-3-0
+      - libayatana-appindicator3-1
+      - librsvg2-2
+  rpm:
+    depends:
+      - webkit2gtk4.1
+      - gtk3
+      - libappindicator-gtk3
+      - librsvg2

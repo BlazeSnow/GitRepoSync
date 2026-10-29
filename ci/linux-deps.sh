@@ -4,6 +4,7 @@
 # - librsvg2-dev：打包图标渲染
 # - patchelf：AppImage 打包
 # - libayatana-appindicator3-dev：系统托盘
+# - rpm：读取 nfpm 产出的 RPM 元数据（打包后自检）
 set -euo pipefail
 
 sudo apt-get update
@@ -11,4 +12,5 @@ sudo apt-get install -y \
 	libwebkit2gtk-4.1-dev \
 	librsvg2-dev \
 	patchelf \
-	libayatana-appindicator3-dev
+	libayatana-appindicator3-dev \
+	rpm
